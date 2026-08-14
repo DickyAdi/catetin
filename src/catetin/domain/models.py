@@ -54,14 +54,14 @@ class Transaction(BaseModel):
 class ParsedTransaction(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    kind: Literal["sale", "expense"]
+    kind: Literal["sale", "expense"] | None  # None = ambiguous, ask user
     item: str = Field(max_length=80)
     qty: int = Field(default=1, gt=0)
     unit_amount: int | None = Field(default=None, ge=0)
     total_amount: int = Field(gt=0)
-    confidence: float = Field(default=1.0, ge=0.0, le=1.0)
-    occurred_on: str | None = None
-    raw_text: str | None = None
+    occurred_on: date  # user-local
+    confidence: float = Field(ge=0.0, le=1.0)
+    raw_text: str = Field(max_length=500)
 
     @field_validator("item")
     @classmethod
@@ -70,13 +70,6 @@ class ParsedTransaction(BaseModel):
         if not stripped:
             raise ValueError("item must not be blank")
         return stripped
-
-    @field_validator("occurred_on")
-    @classmethod
-    def _check_occurred_on(cls, value: str | None) -> str | None:
-        if value is None:
-            return None
-        return _validate_occurred_on(value)
 
 
 class Summary(BaseModel):
