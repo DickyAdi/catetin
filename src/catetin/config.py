@@ -10,6 +10,7 @@ class Settings(BaseSettings):
     telegram_bot_token: SecretStr
     webhook_path: str = "/webhook/telegram/{secret}"
     database_url: str = "sqlite+aiosqlite:///./catetin.db"
+    db_reader_pool_size: int = 3
     redis_url: str | None = None
     expected_db_revision: str = "0001_initial"
     log_level: str = "INFO"
