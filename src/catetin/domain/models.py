@@ -111,3 +111,21 @@ class ParseFailure(BaseModel):
     raw_text: str
     reason: str
     created_at: int
+
+
+class FailedSegment(BaseModel):
+    """One segment the parser could not turn into a transaction."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    raw_text: str = Field(max_length=500)
+    reason: str  # no_amount | too_many_segments | amount_too_large | no_item
+
+
+class ParseOutcome(BaseModel):
+    """Richer result than `ParserPort.parse` — carries failure reasons too."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    parsed: list[ParsedTransaction]
+    failures: list[FailedSegment]

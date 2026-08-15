@@ -45,6 +45,14 @@ class SqlAlchemyUserRepository:
         await self._session.flush()
         return user_to_domain(row)
 
+    async def set_timezone(self, user_id: int, tz: str) -> User:
+        row = await self._session.get(UserRow, user_id)
+        if row is None:
+            raise NotFound(f"user {user_id} not found")
+        row.timezone = tz
+        await self._session.flush()
+        return user_to_domain(row)
+
     async def mark_blocked(self, user_id: int) -> User:
         row = await self._session.get(UserRow, user_id)
         if row is None:

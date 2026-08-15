@@ -1,7 +1,7 @@
 from datetime import date
 from typing import Protocol
 
-from ..models import ParsedTransaction
+from ..models import ParsedTransaction, ParseOutcome
 
 
 class ParserPort(Protocol):
@@ -15,3 +15,15 @@ class ParserPort(Protocol):
     async def parse(
         self, text: str, *, today: date, slang_enabled: bool = True
     ) -> list[ParsedTransaction]: ...
+
+    def parse_detailed(
+        self, text: str, *, today: date, slang_enabled: bool = True
+    ) -> ParseOutcome:
+        """Like `parse`, but also reports why segments were dropped.
+
+        Synchronous and adapter-local by nature (regex parsing is inline in
+        the event loop, never a thread hop — see Async & Resource Design) but
+        promoted onto the port so `application/record_transactions.py` can
+        depend on the port alone rather than importing `RegexParser` directly.
+        """
+        ...

@@ -14,11 +14,10 @@ extracted (most specific structural signal first):
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
 from datetime import date
 from typing import Literal
 
-from ....domain.models import ParsedTransaction
+from ....domain.models import FailedSegment, ParsedTransaction, ParseOutcome
 from . import amounts, lexicon, segmenter
 
 Kind = Literal["sale", "expense"] | None
@@ -37,25 +36,6 @@ _PUNCT_RE = re.compile(r"[/,;:@]+")
 _WS_RE = re.compile(r"\s+")
 
 _NO_NAME_ITEM = "(tanpa nama)"
-
-
-@dataclass(frozen=True, slots=True)
-class FailedSegment:
-    raw_text: str
-    reason: str  # no_amount | too_many_segments | amount_too_large | no_item
-
-
-@dataclass(frozen=True, slots=True)
-class ParseOutcome:
-    """Richer result than ParserPort.parse — carries failure reasons too.
-
-    ParserPort itself only returns `list[ParsedTransaction]` (see the
-    Modules M1-M2 design doc); this is an adapter-level extra used by
-    callers that need to persist to `parse_failures`.
-    """
-
-    parsed: list[ParsedTransaction]
-    failures: list[FailedSegment]
 
 
 class RegexParser:

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from datetime import date
 
-from ....domain.models import ParsedTransaction
+from ....domain.models import ParsedTransaction, ParseOutcome
 
 
 class LLMParser:
@@ -18,4 +18,9 @@ class LLMParser:
     async def parse(
         self, text: str, *, today: date, slang_enabled: bool = True
     ) -> list[ParsedTransaction]:
+        raise NotImplementedError("LLMParser is not implemented yet (Phase 2)")
+
+    def parse_detailed(
+        self, text: str, *, today: date, slang_enabled: bool = True
+    ) -> ParseOutcome:
         raise NotImplementedError("LLMParser is not implemented yet (Phase 2)")
