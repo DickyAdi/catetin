@@ -1,0 +1,20 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    env_file:
+      - apps/api/.env
+    environment:
+      # Override the relative dev-mode defaults (config.py) so the SQLite DB
+      # and backups live on the persisted volume below, not the image layer.
+      CATETIN_DATABASE_URL: sqlite+aiosqlite:////data/catetin.db
+      CATETIN_BACKUP_DIR: /data/backups
+    volumes:
+      - catetin_data:/data
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+
+volumes:
+  catetin_data:

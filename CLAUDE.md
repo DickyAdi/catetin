@@ -2,11 +2,41 @@
 
 Chat-based bookkeeping bot for Indonesian UMKM. Users send plain chat messages to a Telegram bot ("jual ayam geprek 50rb") and get profit/loss summaries — daily, weekly, or as a PDF. No new app, no spreadsheet.
 
-## Quick commands (always `uv run`)
+## Repository layout (monorepo)
+
+```
+catetin/
+├── Makefile                # cd's into apps/api for every backend target — see `make help`
+├── compose.yaml             # docker compose, root-level (build context = repo root)
+├── pyproject.toml           # uv workspace root — virtual (no [project]), members = ["apps/*"]
+├── uv.lock                  # THE single lockfile for the whole workspace (not duplicated per app)
+├── apps/
+│   ├── api/                 # backend — everything below used to be repo root pre-monorepo
+│   │   ├── pyproject.toml, Dockerfile, alembic.ini
+│   │   ├── alembic/, src/catetin/, tests/
+│   │   └── .env.example     # copy to .env (make setup does this automatically)
+│   └── web/                 # marketing site, not started yet (see "Frontend" below)
+├── packages/                 # future shared code (empty for now)
+├── scripts/                  # future ops scripts, e.g. scripts/deploy.sh (empty for now)
+└── backups/                  # runtime DB backup output (gitignored contents)
+```
+
+`uv sync` / `uv run ...` work from **both** the repo root and `apps/api` — uv walks up to
+find the workspace root at `pyproject.toml`, so both resolve to the same shared
+`.venv`/`uv.lock` at the repo root. Never create a second `uv.lock` or `.venv` inside
+`apps/api`. See the comment block at the top of the root `pyproject.toml` for why this
+(a true uv workspace) was chosen over a "Makefile just cd's into apps/api" fallback.
+
+## Quick commands
+
+Prefer the `Makefile` (`make help` lists everything: `setup`, `dev`, `test`, `lint`,
+`typecheck`, `migrate`, `migrate-new msg="..."`, `dockerized`, `docker-up`, `docker-down`,
+`clean`, `status`, `deploy`). Equivalent raw commands, run from `apps/api/` (or from the
+repo root with `-C apps/api` / `--project apps/api`):
 
 ```bash
-uv sync                          # install deps (uv.lock committed)
-uv run pytest tests/ -q          # run all tests (89+)
+uv sync                          # install deps (uv.lock committed, at repo root)
+uv run pytest tests/ -q          # run all tests (116)
 uv run pytest tests/unit -q      # unit only
 uv run pytest tests/integration -q
 uv run ruff check src tests      # lint
@@ -22,6 +52,8 @@ uv run alembic revision --autogenerate -m "msg"   # only for NEW revisions; init
 inbound adapters ──► application (use cases) ──► domain (models + ports) ◄── outbound adapters
 ```
 
+All paths below are relative to `apps/api/`.
+
 - **`src/catetin/domain/`** — pure Python. Pydantic models + `typing.Protocol` ports. NO I/O, NO framework imports. Never imports adapters.
 - **`src/catetin/application/`** — use cases (M3). Depend only on domain models + ports. Never import adapters directly.
 - **`src/catetin/adapters/inbound/`** — HTTP shell (FastAPI + raw ASGI middleware), Telegram bot (Phase 6), scheduler (Phase 6).
@@ -35,7 +67,7 @@ Only 5 ports earn their keep (per design docs): `ParserPort`, `MessagingPort`, `
 
 | Concern | Decision |
 |---|---|
-| Package manager | `uv` (lockfile committed, `uv sync --frozen` in deploy) |
+| Package manager | `uv` workspace (single `uv.lock` at repo root, committed; `uv sync --frozen` in deploy) |
 | Web framework | FastAPI, `ORJSONResponse` default |
 | HTTP client | one shared `httpx.AsyncClient` |
 | Concurrency | **async-first**; sync only for genuinely blocking work via `asyncio.to_thread` |
@@ -86,23 +118,27 @@ When asked to implement a module: **fetch the relevant Outline docs first** and 
 - P3 ✅ persistence (2 engines, 5 repos, alembic 0001_initial) — `da6dce7`
 - P4 ✅ application use cases (record, summarize, manage, onboarding, generate_report, replay_inbox) — `0dbd824`
 - P5 ✅ HTTP shell (pure-ASGI middleware, health/webhook/ops routes, composition) — `d715674`
-- P6 ⏳ Telegram adapter (M1) + scheduler (M8) — NEXT
-- P7 ⏳ Report renderers (M4): text + fpdf2 PDF (`/lapor`) — after P6
+- P6 ✅ Telegram adapter (M1) + scheduler (M8) — `48fcabf`
+- P7 ✅ Report renderers (M4): text + fpdf2 PDF (`/lapor`) — `aa93dad` — **MVP feature-complete**
+- Monorepo restructure (`apps/api`, `apps/web`, `packages/`, `scripts/`, Makefile, Docker) — done, this doc's layout is current
 
 ## Frontend (Phase: not started)
 
-Marketing-only static site (no product dashboard). React Router (library mode, NOT framework mode) + shadcn + Vite, prerendered via vite-react-ssg for SEO. Build in CI only — **node/npm must never be installed on the VPS**. Hosted externally (e.g. Cloudflare Pages). Details: "Frontend Marketing" doc in Outline.
+Marketing-only static site (no product dashboard), lives in `apps/web/` (currently just a `.gitkeep`). React Router (library mode, NOT framework mode) + shadcn + Vite, prerendered via vite-react-ssg for SEO. Build in CI only — **node/npm must never be installed on the VPS**. Hosted externally (e.g. Cloudflare Pages). Details: "Frontend Marketing" doc in Outline.
 
 ## Testing conventions
 
+All paths below are relative to `apps/api/`.
+
 - `tests/unit/` — parser (table-driven, largest suite), amounts, middleware, use cases (with `tests/fakes/`: FakeUnitOfWork, fake repos, fake parser/messaging, frozen_clock).
-- `tests/integration/` — real temp SQLite via `conftest.py`: repositories, migrations (alembic upgrade + index/WITHOUT-ROWID assertions), webhook (ASGITransport).
+- `tests/integration/` — real temp SQLite via `conftest.py`: repositories, migrations (alembic upgrade + index/WITHOUT-ROWID assertions), webhook (ASGITransport). Path fixtures (`REPO_ROOT` in `conftest.py`/`test_migrations.py`) are `Path(__file__).resolve().parents[2]`, i.e. always `apps/api` regardless of cwd — survived the monorepo move with zero changes.
 - `tests/contract/` — empty (port contract tests planned).
 - Isolation tests: cross-user access attempts + structural check that every query filters `user_id`.
 
 ## Gotchas (learned — do not relearn)
 
 - `uv` is installed **system-wide** (use plain `uv run`; do not `pip install`).
+- Monorepo: `apps/api` is a `uv` workspace **member**, not a standalone project — it has no `uv.lock`/`.venv` of its own. The one lockfile lives at the repo root. Docker build context for `apps/api/Dockerfile` is deliberately the **repo root** (`compose.yaml`: `build.context: .`), not `apps/api/`, so the image build can see the workspace root files.
 - Alembic `autogenerate` does NOT reliably round-trip partial indexes / WITHOUT ROWID — hand-write those parts.
 - `pytest-asyncio` needs `asyncio_mode = "auto"` (already set in pyproject).
 - Telegram webhook path secret: `/webhook/telegram/{secret}` — webhook_auth middleware validates it; webhook route never returns 5xx (durable inbox acceptance is the priority).

@@ -228,3 +228,13 @@ __marimo__/
 
 # Alembic — keep versions/ committed; only local env.py cache
 .alembic_cache
+
+# Runtime backup output (apps/api/config.py backup_dir) — contents are *.db
+# already, this also covers the directory itself if that pattern ever changes.
+backups/*
+!backups/.gitkeep
+
+# Monorepo: apps/web (Node) local caches, once the frontend lands
+apps/web/node_modules/
+apps/web/dist/
+apps/web/.vite/
