@@ -6,7 +6,7 @@ from alembic import context
 from sqlalchemy import Connection, pool
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
-from catetin.adapters.outbound.persistence.orm import Base
+from catetin.adapters.outbound.persistence.models import Base
 
 config = context.config
 

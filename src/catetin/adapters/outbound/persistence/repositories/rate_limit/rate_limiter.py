@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from catetin.domain.ports.clock import ClockPort
 
-from .orm import RateLimitRow
+from ...models import RateLimitRow
 
 
 class SqliteRateLimiter:

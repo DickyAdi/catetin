@@ -20,7 +20,9 @@ from .adapters.outbound.persistence.engine import (
     create_writer_engine,
     session_factory,
 )
-from .adapters.outbound.persistence.rate_limiter import SqliteRateLimiter
+from .adapters.outbound.persistence.repositories.rate_limit.rate_limiter import (
+    SqliteRateLimiter,
+)
 from .adapters.outbound.persistence.uow import SqlAlchemyUnitOfWork
 from .adapters.outbound.system_clock import SystemClock
 from .application.manage_transactions import ManageTransactions

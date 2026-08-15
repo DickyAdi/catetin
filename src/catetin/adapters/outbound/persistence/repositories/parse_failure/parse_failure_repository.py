@@ -3,8 +3,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from catetin.domain.models import ParseFailure
 
+from ...models import ParseFailureRow
 from .mappers import parse_failure_to_domain
-from .orm import ParseFailureRow
 
 
 class SqlAlchemyParseFailureRepository:

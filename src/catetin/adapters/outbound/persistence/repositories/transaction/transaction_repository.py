@@ -10,12 +10,12 @@ from catetin.domain.models import (
 )
 from catetin.domain.ports.clock import ClockPort
 
+from ...models import TransactionRow
 from .mappers import (
     transaction_row_from_parsed,
     transaction_to_domain,
     transaction_values_from_parsed,
 )
-from .orm import TransactionRow
 
 
 class SqlAlchemyTransactionRepository:

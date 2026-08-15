@@ -10,7 +10,9 @@ from datetime import date
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from catetin.adapters.outbound.persistence.rate_limiter import SqliteRateLimiter
+from catetin.adapters.outbound.persistence.repositories.rate_limit.rate_limiter import (
+    SqliteRateLimiter,
+)
 from catetin.adapters.outbound.persistence.uow import SqlAlchemyUnitOfWork
 from catetin.domain.models import ParsedTransaction
 from tests.fakes.frozen_clock import FrozenClock

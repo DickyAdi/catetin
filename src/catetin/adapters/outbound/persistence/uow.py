@@ -15,11 +15,15 @@ from sqlalchemy.orm import with_loader_criteria
 
 from catetin.domain.ports.clock import ClockPort
 
-from .inbox_repository import SqlAlchemyInboxRepository
-from .orm import TransactionRow
-from .parse_failure_repository import SqlAlchemyParseFailureRepository
-from .transaction_repository import SqlAlchemyTransactionRepository
-from .user_repository import SqlAlchemyUserRepository
+from .models import TransactionRow
+from .repositories.inbox.inbox_repository import SqlAlchemyInboxRepository
+from .repositories.parse_failure.parse_failure_repository import (
+    SqlAlchemyParseFailureRepository,
+)
+from .repositories.transaction.transaction_repository import (
+    SqlAlchemyTransactionRepository,
+)
+from .repositories.user.user_repository import SqlAlchemyUserRepository
 
 
 def _install_soft_delete_filter(session: AsyncSession) -> None:

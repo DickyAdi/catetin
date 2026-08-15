@@ -5,8 +5,8 @@ from catetin.domain.errors import NotFound
 from catetin.domain.models import User
 from catetin.domain.ports.clock import ClockPort
 
+from ...models import UserRow
 from .mappers import user_to_domain
-from .orm import UserRow
 
 
 class SqlAlchemyUserRepository:

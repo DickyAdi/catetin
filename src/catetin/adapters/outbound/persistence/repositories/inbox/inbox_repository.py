@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from catetin.domain.ports.clock import ClockPort
 
-from .orm import InboxRow
+from ...models import InboxRow
 
 
 class SqlAlchemyInboxRepository:
