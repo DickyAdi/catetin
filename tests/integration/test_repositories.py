@@ -79,6 +79,36 @@ async def test_transaction_batch_create_and_list_recent(uow: SqlAlchemyUnitOfWor
     assert all(t.user_id == user.id for t in recent)
 
 
+async def test_transaction_batch_add_inserts_all_in_one_go_with_ids_populated(
+    uow: SqlAlchemyUnitOfWork,
+) -> None:
+    async with uow as u:
+        user = await u.users.create("telegram", "2005")
+        parsed = [_parsed(item="kopi"), _parsed(item="teh"), _parsed(item="roti")]
+        recorded = await u.transactions.batch_add(user.id, parsed)
+        await u.commit()
+
+    assert [t.item for t in recorded] == ["kopi", "teh", "roti"]
+    assert all(t.id is not None for t in recorded)
+    assert len({t.id for t in recorded}) == 3
+    assert all(t.user_id == user.id for t in recorded)
+
+    async with uow as u:
+        recent = await u.transactions.list_recent(user.id)
+    assert {t.item for t in recent} == {"kopi", "teh", "roti"}
+
+
+async def test_transaction_batch_add_empty_list_returns_empty(
+    uow: SqlAlchemyUnitOfWork,
+) -> None:
+    async with uow as u:
+        user = await u.users.create("telegram", "2006")
+        recorded = await u.transactions.batch_add(user.id, [])
+        await u.commit()
+
+    assert recorded == []
+
+
 async def test_summarize_range_aggregates_by_kind(uow: SqlAlchemyUnitOfWork) -> None:
     async with uow as u:
         user = await u.users.create("telegram", "3001")
@@ -152,6 +182,31 @@ async def test_inbox_add_if_new_is_idempotent(uow: SqlAlchemyUnitOfWork) -> None
         unprocessed = await u.inbox.list_unprocessed()
 
     assert [update_id for update_id, _ in unprocessed] == [42]
+
+
+async def test_ops_stats_count_methods(uow: SqlAlchemyUnitOfWork, clock: FrozenClock) -> None:
+    """The repo-layer counts that back GET /ops/api/stats (instance-wide, not
+    user-scoped)."""
+    async with uow as u:
+        user_a = await u.users.create("telegram", "6001")
+        user_b = await u.users.create("telegram", "6002")
+        await u.transactions.add(user_a.id, _parsed(occurred_on=date(2026, 8, 15)))
+        await u.transactions.add(user_b.id, _parsed(occurred_on=date(2026, 8, 15)))
+        await u.transactions.add(user_a.id, _parsed(occurred_on=date(2026, 8, 10)))
+        await u.parse_failures.add(user_a.id, "gak jelas", "no_amount")
+        await u.inbox.add_if_new(1, b"{}")
+        await u.inbox.mark_processed(1)
+        await u.inbox.add_if_new(2, b"{}")
+        await u.commit()
+
+    since_all = int(clock.now().timestamp()) - 3600
+
+    async with uow as u:
+        assert await u.users.count_total() == 2
+        assert await u.transactions.count_by_occurred_on("2026-08-15") == 2
+        assert await u.transactions.count_created_since(since_all) == 3
+        assert await u.parse_failures.count_since(since_all) == 1
+        assert await u.inbox.count_unprocessed() == 1
 
 
 async def test_inbox_mark_processed_removes_from_unprocessed(

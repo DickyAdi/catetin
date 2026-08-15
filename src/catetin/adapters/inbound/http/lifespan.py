@@ -36,6 +36,7 @@ def build_lifespan(
             reader_engine=engines.reader,
             clock=deps.clock,
             started_at=time.monotonic(),
+            reader_uow_factory=deps.reader_uow_factory,
         )
         # Phase 6 will start the asyncio scheduler task (M8) here.
         app.state.scheduler_task = None

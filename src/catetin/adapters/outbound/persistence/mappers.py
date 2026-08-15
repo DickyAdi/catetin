@@ -57,25 +57,33 @@ def parse_failure_to_domain(row: ParseFailureRow) -> ParseFailure:
     )
 
 
-def transaction_row_from_parsed(
+def transaction_values_from_parsed(
     user_id: int, parsed: ParsedTransaction, occurred_at: int
-) -> TransactionRow:
-    """`parsed.kind` must already be resolved (non-None) by the caller —
+) -> dict[str, object]:
+    """Column values for a persisted transaction row — shared by the single-row
+    `TransactionRow(...)` constructor and bulk `insert(TransactionRow)` executemany
+    dicts alike. `parsed.kind` must already be resolved (non-None) by the caller —
     ambiguous kind is an application-layer concern, not a persistence one."""
     if parsed.kind is None:
         raise DomainValidationError("cannot persist a ParsedTransaction with an ambiguous kind")
-    return TransactionRow(
-        user_id=user_id,
-        kind=parsed.kind,
-        item=parsed.item,
-        qty=parsed.qty,
-        unit_amount=parsed.unit_amount,
-        total_amount=parsed.total_amount,
-        occurred_on=parsed.occurred_on.isoformat(),
-        occurred_at=occurred_at,
-        confidence=parsed.confidence,
-        raw_text=parsed.raw_text,
-    )
+    return {
+        "user_id": user_id,
+        "kind": parsed.kind,
+        "item": parsed.item,
+        "qty": parsed.qty,
+        "unit_amount": parsed.unit_amount,
+        "total_amount": parsed.total_amount,
+        "occurred_on": parsed.occurred_on.isoformat(),
+        "occurred_at": occurred_at,
+        "confidence": parsed.confidence,
+        "raw_text": parsed.raw_text,
+    }
+
+
+def transaction_row_from_parsed(
+    user_id: int, parsed: ParsedTransaction, occurred_at: int
+) -> TransactionRow:
+    return TransactionRow(**transaction_values_from_parsed(user_id, parsed, occurred_at))
 
 
 def inbox_row_from_payload(update_id: int, payload: bytes) -> InboxRow:

@@ -1,6 +1,6 @@
 from typing import cast
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -38,3 +38,7 @@ class SqlAlchemyInboxRepository:
         )
         rows = (await self._session.execute(stmt)).all()
         return [(update_id, payload) for update_id, payload in rows]
+
+    async def count_unprocessed(self) -> int:
+        stmt = select(func.count()).select_from(InboxRow).where(InboxRow.processed_at.is_(None))
+        return (await self._session.execute(stmt)).scalar_one()

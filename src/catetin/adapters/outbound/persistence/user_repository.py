@@ -1,4 +1,4 @@
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from catetin.domain.errors import NotFound
@@ -60,3 +60,7 @@ class SqlAlchemyUserRepository:
         row.blocked_at = int(self._clock.now().timestamp())
         await self._session.flush()
         return user_to_domain(row)
+
+    async def count_total(self) -> int:
+        stmt = select(func.count()).select_from(UserRow)
+        return (await self._session.execute(stmt)).scalar_one()

@@ -1,4 +1,4 @@
-from sqlalchemy import case, desc, func, select
+from sqlalchemy import case, desc, func, insert, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from catetin.domain.models import (
@@ -10,7 +10,11 @@ from catetin.domain.models import (
 )
 from catetin.domain.ports.clock import ClockPort
 
-from .mappers import transaction_row_from_parsed, transaction_to_domain
+from .mappers import (
+    transaction_row_from_parsed,
+    transaction_to_domain,
+    transaction_values_from_parsed,
+)
 from .orm import TransactionRow
 
 
@@ -25,6 +29,32 @@ class SqlAlchemyTransactionRepository:
         self._session.add(row)
         await self._session.flush()
         return transaction_to_domain(row)
+
+    async def batch_add(
+        self, user_id: int, parsed: list[ParsedTransaction]
+    ) -> list[Transaction]:
+        """One `executemany` INSERT for the whole batch instead of N round trips.
+
+        SQLite/aiosqlite doesn't reliably support RETURNING with executemany, so
+        the inserted rows are re-fetched by id afterward. Safe because the writer
+        engine's single-connection pool holds this session's transaction exclusively
+        until commit — no other write can land between the insert and the select.
+        """
+        if not parsed:
+            return []
+        occurred_at = int(self._clock.now().timestamp())
+        values = [transaction_values_from_parsed(user_id, p, occurred_at) for p in parsed]
+        await self._session.execute(insert(TransactionRow), values)
+        await self._session.flush()
+
+        stmt = (
+            select(TransactionRow)
+            .where(TransactionRow.user_id == user_id, TransactionRow.occurred_at == occurred_at)
+            .order_by(desc(TransactionRow.id))
+            .limit(len(values))
+        )
+        rows = (await self._session.execute(stmt)).scalars().all()
+        return [transaction_to_domain(row) for row in reversed(rows)]
 
     async def get(self, user_id: int, transaction_id: int) -> Transaction | None:
         stmt = select(TransactionRow).where(
@@ -129,3 +159,19 @@ class SqlAlchemyTransactionRepository:
         )
         rows = (await self._session.execute(stmt)).all()
         return [ItemTotal(item=item, kind=kind, total=total) for item, kind, total in rows]
+
+    async def count_by_occurred_on(self, occurred_on: str) -> int:
+        """Instance-wide (all users) count for ops stats — not user-scoped."""
+        stmt = select(func.count()).select_from(TransactionRow).where(
+            TransactionRow.occurred_on == occurred_on,
+            TransactionRow.deleted_at.is_(None),
+        )
+        return (await self._session.execute(stmt)).scalar_one()
+
+    async def count_created_since(self, since_at: int) -> int:
+        """Instance-wide (all users) count for ops stats — not user-scoped."""
+        stmt = select(func.count()).select_from(TransactionRow).where(
+            TransactionRow.created_at >= since_at,
+            TransactionRow.deleted_at.is_(None),
+        )
+        return (await self._session.execute(stmt)).scalar_one()

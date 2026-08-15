@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine
 
 from catetin.config import Settings
 from catetin.domain.ports.clock import ClockPort
+from catetin.domain.ports.repositories import UnitOfWork
 
 APP_VERSION = "0.1.0"
 
@@ -23,6 +24,7 @@ class AppState:
     reader_engine: AsyncEngine
     clock: ClockPort
     started_at: float
+    reader_uow_factory: Callable[[], UnitOfWork]
     on_webhook_update: Callable[[bytes], Awaitable[None]] | None = None
 
 

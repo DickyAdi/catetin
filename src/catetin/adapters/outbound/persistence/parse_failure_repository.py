@@ -1,4 +1,4 @@
-from sqlalchemy import desc, select
+from sqlalchemy import desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from catetin.domain.models import ParseFailure
@@ -21,3 +21,9 @@ class SqlAlchemyParseFailureRepository:
         stmt = select(ParseFailureRow).order_by(desc(ParseFailureRow.created_at)).limit(limit)
         rows = (await self._session.execute(stmt)).scalars().all()
         return [parse_failure_to_domain(row) for row in rows]
+
+    async def count_since(self, since_at: int) -> int:
+        stmt = select(func.count()).select_from(ParseFailureRow).where(
+            ParseFailureRow.created_at >= since_at
+        )
+        return (await self._session.execute(stmt)).scalar_one()

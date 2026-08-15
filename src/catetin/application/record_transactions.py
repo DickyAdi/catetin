@@ -2,7 +2,7 @@
 
 The path behind every non-command text message (US-01..03, US-08). Per the
 Modules M3-M4 doc: a batch of N segments is not all-or-nothing, but the
-valid subset *is* one DB transaction — every `add()` below and the final
+valid subset *is* one DB transaction — the `batch_add()` below and the final
 `daily_totals`/`summarize_range` read happen inside a single `async with
 self._uow` block, committed once.
 """
@@ -59,7 +59,7 @@ class RecordTransactions:
 
         today_str = today.isoformat()
         async with self._uow as uow:
-            recorded = [await uow.transactions.add(user_id, parsed) for parsed in resolvable]
+            recorded = await uow.transactions.batch_add(user_id, resolvable)
             for issue in issues:
                 await uow.parse_failures.add(user_id, issue.raw_text, issue.reason)
             today_total = await uow.transactions.summarize_range(user_id, today_str, today_str)

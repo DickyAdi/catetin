@@ -7,6 +7,7 @@ order so it can verify the schema revision between them; nothing else
 should import the constructors this module wraps.
 """
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import cast
 
@@ -46,6 +47,7 @@ class Dependencies:
     parser: ParserPort
     rate_limiter: RateLimiterPort
     uow: UnitOfWork
+    reader_uow_factory: Callable[[], UnitOfWork]
     onboarding: Onboarding
     record_transactions: RecordTransactions
     manage_transactions: ManageTransactions
@@ -71,11 +73,19 @@ def wire(settings: Settings, engines: Engines) -> Dependencies:
     rate_limiter = SqliteRateLimiter(engines.writer_sessions, clock)
     uow = cast(UnitOfWork, SqlAlchemyUnitOfWork(engines.writer_sessions, clock))
 
+    def reader_uow_factory() -> UnitOfWork:
+        # A fresh UoW per call (not a shared instance, unlike `uow` above) — ops
+        # stats reads can be concurrent, and SqlAlchemyUnitOfWork stores its
+        # session on `self`, so sharing one instance across concurrent callers
+        # would race.
+        return cast(UnitOfWork, SqlAlchemyUnitOfWork(engines.reader_sessions, clock))
+
     return Dependencies(
         clock=clock,
         parser=parser,
         rate_limiter=rate_limiter,
         uow=uow,
+        reader_uow_factory=reader_uow_factory,
         onboarding=Onboarding(uow),
         record_transactions=RecordTransactions(parser, uow),
         manage_transactions=ManageTransactions(uow),

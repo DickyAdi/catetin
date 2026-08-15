@@ -29,9 +29,15 @@ class UserRepository(Protocol):
 
     async def mark_blocked(self, user_id: int) -> User: ...
 
+    async def count_total(self) -> int: ...  # instance-wide, for ops stats
+
 
 class TransactionRepository(Protocol):
     async def add(self, user_id: int, parsed: ParsedTransaction) -> Transaction: ...
+
+    async def batch_add(
+        self, user_id: int, parsed: list[ParsedTransaction]
+    ) -> list[Transaction]: ...
 
     async def get(self, user_id: int, transaction_id: int) -> Transaction | None: ...
 
@@ -47,6 +53,11 @@ class TransactionRepository(Protocol):
 
     async def top_items(self, user_id: int, kind: str, limit: int = 10) -> list[ItemTotal]: ...
 
+    # instance-wide (all users), for ops stats
+    async def count_by_occurred_on(self, occurred_on: str) -> int: ...
+
+    async def count_created_since(self, since_at: int) -> int: ...
+
 
 class InboxRepository(Protocol):
     async def add_if_new(self, update_id: int, payload: bytes) -> bool: ...  # False if duplicate
@@ -55,11 +66,15 @@ class InboxRepository(Protocol):
 
     async def list_unprocessed(self) -> list[tuple[int, bytes]]: ...
 
+    async def count_unprocessed(self) -> int: ...  # for ops stats
+
 
 class ParseFailureRepository(Protocol):
     async def add(self, user_id: int | None, raw_text: str, reason: str) -> ParseFailure: ...
 
     async def list_recent(self, limit: int = 50) -> list[ParseFailure]: ...
+
+    async def count_since(self, since_at: int) -> int: ...  # for ops stats
 
 
 class RateLimiterPort(Protocol):

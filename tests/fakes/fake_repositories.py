@@ -77,6 +77,9 @@ class FakeUserRepository:
         self._users[user_id] = updated
         return updated
 
+    async def count_total(self) -> int:
+        return len(self._users)
+
 
 class FakeTransactionRepository:
     def __init__(self, clock: ClockPort, rows: list[Transaction]) -> None:
@@ -111,6 +114,11 @@ class FakeTransactionRepository:
         )
         self._rows.append(tx)
         return tx
+
+    async def batch_add(
+        self, user_id: int, parsed: list[ParsedTransaction]
+    ) -> list[Transaction]:
+        return [await self.add(user_id, p) for p in parsed]
 
     async def get(self, user_id: int, transaction_id: int) -> Transaction | None:
         for t in self._live(user_id):
@@ -167,6 +175,16 @@ class FakeTransactionRepository:
         ranked = sorted(totals.items(), key=lambda kv: kv[1], reverse=True)
         return [ItemTotal(item=item, kind=kind, total=total) for item, total in ranked[:limit]]
 
+    async def count_by_occurred_on(self, occurred_on: str) -> int:
+        return sum(
+            1
+            for t in self._rows
+            if t.occurred_on == occurred_on and t.deleted_at is None
+        )
+
+    async def count_created_since(self, since_at: int) -> int:
+        return sum(1 for t in self._rows if t.created_at >= since_at and t.deleted_at is None)
+
 
 class FakeInboxRepository:
     def __init__(self, clock: ClockPort, rows: dict[int, tuple[bytes, int | None]]) -> None:
@@ -191,6 +209,9 @@ class FakeInboxRepository:
             if processed_at is None
         ]
 
+    async def count_unprocessed(self) -> int:
+        return sum(1 for _, processed_at in self._rows.values() if processed_at is None)
+
 
 class FakeParseFailureRepository:
     def __init__(self, clock: ClockPort, rows: list[ParseFailure]) -> None:
@@ -213,6 +234,9 @@ class FakeParseFailureRepository:
 
     async def list_recent(self, limit: int = 50) -> list[ParseFailure]:
         return sorted(self._rows, key=lambda f: f.created_at, reverse=True)[:limit]
+
+    async def count_since(self, since_at: int) -> int:
+        return sum(1 for f in self._rows if f.created_at >= since_at)
 
 
 class FakeUnitOfWork:

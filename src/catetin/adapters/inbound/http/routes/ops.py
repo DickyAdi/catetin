@@ -14,14 +14,6 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import HTMLResponse, ORJSONResponse, PlainTextResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
-from sqlalchemy import func, select
-
-from catetin.adapters.outbound.persistence.orm import (
-    InboxRow,
-    ParseFailureRow,
-    TransactionRow,
-    UserRow,
-)
 
 from ..state import AppState, get_state
 
@@ -49,44 +41,12 @@ async def _collect_stats(state: AppState) -> dict[str, Any]:
     today = state.clock.today_local(state.settings.timezone).isoformat()
     since_24h = int((state.clock.now() - timedelta(hours=24)).timestamp())
 
-    async with state.reader_engine.connect() as conn:
-        users_total = (
-            await conn.execute(select(func.count()).select_from(UserRow))
-        ).scalar_one()
-        transactions_today = (
-            await conn.execute(
-                select(func.count())
-                .select_from(TransactionRow)
-                .where(
-                    TransactionRow.occurred_on == today,
-                    TransactionRow.deleted_at.is_(None),
-                )
-            )
-        ).scalar_one()
-        failures_24h = (
-            await conn.execute(
-                select(func.count())
-                .select_from(ParseFailureRow)
-                .where(ParseFailureRow.created_at >= since_24h)
-            )
-        ).scalar_one()
-        successes_24h = (
-            await conn.execute(
-                select(func.count())
-                .select_from(TransactionRow)
-                .where(
-                    TransactionRow.created_at >= since_24h,
-                    TransactionRow.deleted_at.is_(None),
-                )
-            )
-        ).scalar_one()
-        queue_depth = (
-            await conn.execute(
-                select(func.count())
-                .select_from(InboxRow)
-                .where(InboxRow.processed_at.is_(None))
-            )
-        ).scalar_one()
+    async with state.reader_uow_factory() as uow:
+        users_total = await uow.users.count_total()
+        transactions_today = await uow.transactions.count_by_occurred_on(today)
+        failures_24h = await uow.parse_failures.count_since(since_24h)
+        successes_24h = await uow.transactions.count_created_since(since_24h)
+        queue_depth = await uow.inbox.count_unprocessed()
 
     attempts_24h = failures_24h + successes_24h
     parse_failure_rate_24h = failures_24h / attempts_24h if attempts_24h else 0.0

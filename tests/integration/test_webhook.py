@@ -14,7 +14,6 @@ from httpx import ASGITransport, AsyncClient
 from catetin import composition
 from catetin.adapters.inbound.http import create_http_app
 from catetin.adapters.inbound.http.state import AppState
-from catetin.adapters.outbound.system_clock import SystemClock
 from catetin.config import Settings
 
 
@@ -93,12 +92,14 @@ async def test_health_ready_returns_service_unavailable_without_migration(
     )
     application = create_http_app(settings)
     engines = composition.create_engines(settings)
+    deps = composition.wire(settings, engines)
     application.state.catetin = AppState(
         settings=settings,
         writer_engine=engines.writer,
         reader_engine=engines.reader,
-        clock=SystemClock(),
+        clock=deps.clock,
         started_at=time.monotonic(),
+        reader_uow_factory=deps.reader_uow_factory,
     )
 
     try:
