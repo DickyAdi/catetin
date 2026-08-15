@@ -130,7 +130,13 @@ def test_check_db_revision_passes_against_migrated_db(
     # pytest-asyncio's event loop, or asyncio.run() would nest and raise.
     command.upgrade(_cfg(database_url, monkeypatch), "head")
 
-    settings = Settings(telegram_bot_token="test-token", database_url=database_url)
+    settings = Settings(
+        telegram_bot_token="test-token",
+        telegram_webhook_secret="test-secret",
+        ops_username="test-ops",
+        ops_password="test-ops-pass",
+        database_url=database_url,
+    )
 
     async def _check() -> None:
         engine = create_writer_engine(settings)
@@ -143,7 +149,13 @@ def test_check_db_revision_passes_against_migrated_db(
 
 
 def test_check_db_revision_fails_against_empty_db(database_url: str) -> None:
-    settings = Settings(telegram_bot_token="test-token", database_url=database_url)
+    settings = Settings(
+        telegram_bot_token="test-token",
+        telegram_webhook_secret="test-secret",
+        ops_username="test-ops",
+        ops_password="test-ops-pass",
+        database_url=database_url,
+    )
 
     async def _check() -> None:
         engine = create_writer_engine(settings)

@@ -28,7 +28,13 @@ def migrated_settings(database_url: str, monkeypatch: pytest.MonkeyPatch) -> Set
     cfg = Config(str(REPO_ROOT / "alembic.ini"))
     cfg.set_main_option("script_location", str(REPO_ROOT / "alembic"))
     command.upgrade(cfg, "head")
-    return Settings(telegram_bot_token="test-token", database_url=database_url)
+    return Settings(
+        telegram_bot_token="test-token",
+        telegram_webhook_secret="test-secret",
+        ops_username="test-ops",
+        ops_password="test-ops-pass",
+        database_url=database_url,
+    )
 
 
 @pytest.fixture

@@ -8,12 +8,17 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="CATETIN_", env_file=".env", extra="ignore")
 
     telegram_bot_token: SecretStr
+    telegram_webhook_secret: SecretStr
     webhook_path: str = "/webhook/telegram/{secret}"
     database_url: str = "sqlite+aiosqlite:///./catetin.db"
     db_reader_pool_size: int = 3
     redis_url: str | None = None
     expected_db_revision: str = "0001_initial"
     log_level: str = "INFO"
+    body_max_bytes: int = 256_000
+
+    ops_username: str
+    ops_password: SecretStr
 
     # Phase 2 placeholders (LLM gateway)
     llm_base_url: str = "http://localhost:20128/v1"

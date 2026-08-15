@@ -30,6 +30,12 @@ asyncio_mode = "auto"
 testpaths = ["tests"]
 pythonpath = ["."]
 
+[tool.ruff.lint.flake8-bugbear]
+# FastAPI's Depends()-as-default pattern is safe despite being a function
+# call in a default argument — it's re-evaluated per request, not shared
+# mutable state. This is ruff's documented knob for that exact case.
+extend-immutable-calls = ["fastapi.Depends"]
+
 [tool.uv]
 package = true
 
