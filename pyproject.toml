@@ -23,6 +23,7 @@ dev = [
     "pytest-asyncio",
     "ruff",
     "mypy",
+    "pypdf>=6.16.1",
 ]
 
 [tool.pytest.ini_options]

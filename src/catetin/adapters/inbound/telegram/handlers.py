@@ -16,11 +16,12 @@ from catetin.adapters.outbound.reporting.text_renderer import (
     render_day_totals,
     render_text,
 )
+from catetin.application.generate_report import GenerateReport
 from catetin.application.manage_transactions import ManageTransactions
 from catetin.application.onboarding import Onboarding
 from catetin.application.record_transactions import RecordTransactions
 from catetin.application.summarize import Summarize
-from catetin.domain.errors import DomainValidationError
+from catetin.domain.errors import DomainValidationError, RateLimited
 from catetin.domain.models import ParsedTransaction, User
 from catetin.domain.ports.clock import ClockPort
 from catetin.domain.ports.messaging import MessagingPort
@@ -43,6 +44,7 @@ class TelegramDeps:
     record_transactions: RecordTransactions
     manage_transactions: ManageTransactions
     summarize: Summarize
+    generate_report: GenerateReport
     messaging: MessagingPort
     clock: ClockPort
     default_timezone: str
@@ -145,7 +147,7 @@ async def on_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def on_report(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """`/lapor` — text report for now; the PDF renderer lands in Phase 7."""
+    """`/lapor` — PDF report over the last 7 days, sent as a document."""
     deps = _deps(context)
     cmd = map_update(update)
     if cmd is None:
@@ -153,14 +155,21 @@ async def on_report(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = await _get_user(deps, cmd)
     today = deps.clock.today_local(user.timezone)
     start = today - timedelta(days=WEEK_DAYS - 1)
-    summary = await deps.summarize.range(user.id, start, today)
-    day_totals = await deps.summarize.week(user.id, today)
-    text = (
-        render_text(summary, user.business_name, period_label="Laporan Mingguan")
-        + "\n\n"
-        + render_day_totals(day_totals)
+
+    try:
+        result = await deps.generate_report.execute(
+            user.id, start, today, period_label="Laporan 7 Hari Terakhir"
+        )
+    except RateLimited:
+        await deps.messaging.send_text(
+            user.id, "Kamu sudah 5x bikin laporan hari ini, coba besok lagi ya."
+        )
+        return
+
+    filename = f"laporan-{start.isoformat()}-{today.isoformat()}.pdf"
+    await deps.messaging.send_document(
+        user.id, filename, result.pdf_bytes, caption="📊 Laporan 7 Hari Terakhir"
     )
-    await deps.messaging.send_text(user.id, text)
 
 
 async def on_digest(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

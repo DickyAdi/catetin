@@ -26,6 +26,7 @@ class Settings(BaseSettings):
     llm_monthly_budget_idr: int = 0
 
     pdf_max_per_user_hour: int = 5
+    pdf_concurrency: int = 1
     digest_enabled_default: bool = True
     timezone: str = "Asia/Jakarta"
 

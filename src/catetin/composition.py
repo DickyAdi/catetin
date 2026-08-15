@@ -27,8 +27,10 @@ from .adapters.outbound.persistence.repositories.rate_limit.rate_limiter import 
     SqliteRateLimiter,
 )
 from .adapters.outbound.persistence.uow import SqlAlchemyUnitOfWork
+from .adapters.outbound.reporting.pdf_renderer import PdfRenderer
 from .adapters.outbound.system_clock import SystemClock
 from .adapters.outbound.telegram.sender import TelegramSender
+from .application.generate_report import GenerateReport
 from .application.manage_transactions import ManageTransactions
 from .application.onboarding import Onboarding
 from .application.record_transactions import RecordTransactions
@@ -37,6 +39,7 @@ from .config import Settings
 from .domain.ports.clock import ClockPort
 from .domain.ports.messaging import MessagingPort
 from .domain.ports.parser import ParserPort
+from .domain.ports.reporting import ReportRendererPort
 from .domain.ports.repositories import RateLimiterPort, UnitOfWork
 
 
@@ -60,6 +63,7 @@ class Dependencies:
     record_transactions: RecordTransactions
     manage_transactions: ManageTransactions
     summarize: Summarize
+    generate_report: GenerateReport
     messaging: MessagingPort
     telegram_application: TelegramApplication
 
@@ -81,6 +85,7 @@ def wire(settings: Settings, engines: Engines) -> Dependencies:
     clock = SystemClock()
     parser = RegexParser()
     rate_limiter = SqliteRateLimiter(engines.writer_sessions, clock)
+    renderer = cast(ReportRendererPort, PdfRenderer(concurrency=settings.pdf_concurrency))
 
     def reader_uow_factory() -> UnitOfWork:
         # A fresh UoW per call (not a shared instance) — ops stats reads can be
@@ -108,6 +113,9 @@ def wire(settings: Settings, engines: Engines) -> Dependencies:
     record_transactions = RecordTransactions(parser, uow)
     manage_transactions = ManageTransactions(uow)
     summarize = Summarize(uow)
+    generate_report = GenerateReport(
+        uow, rate_limiter, renderer, max_per_user_hour=settings.pdf_max_per_user_hour
+    )
 
     # The inbound Application and the outbound sender share one PTB Bot
     # instance (`application.bot`) — no second token, no second connection
@@ -119,6 +127,7 @@ def wire(settings: Settings, engines: Engines) -> Dependencies:
         record_transactions=record_transactions,
         manage_transactions=manage_transactions,
         summarize=summarize,
+        generate_report=generate_report,
         messaging=messaging,
         clock=clock,
         default_timezone=settings.timezone,
@@ -135,6 +144,7 @@ def wire(settings: Settings, engines: Engines) -> Dependencies:
         record_transactions=record_transactions,
         manage_transactions=manage_transactions,
         summarize=summarize,
+        generate_report=generate_report,
         messaging=messaging,
         telegram_application=application,
     )

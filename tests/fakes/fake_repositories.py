@@ -315,9 +315,21 @@ class FakeReportRenderer:
     def __init__(self, pdf_bytes: bytes = b"%PDF-fake%") -> None:
         self._pdf_bytes = pdf_bytes
         self.calls = 0
+        self.last_business_name: str | None = None
+        self.last_period_label: str | None = None
+        self.last_item_totals: list[ItemTotal] | None = None
 
     async def render_pdf(
-        self, user_id: int, summary: Summary, day_totals: list[DayTotal]
+        self,
+        user_id: int,
+        summary: Summary,
+        day_totals: list[DayTotal],
+        item_totals: list[ItemTotal],
+        business_name: str | None,
+        period_label: str,
     ) -> bytes:
         self.calls += 1
+        self.last_business_name = business_name
+        self.last_period_label = period_label
+        self.last_item_totals = item_totals
         return self._pdf_bytes

@@ -136,6 +136,41 @@ async def test_webhook_duplicate_update_id_is_not_reprocessed(
     assert len(sent) == 1  # the duplicate update_id was not re-dispatched
 
 
+async def test_webhook_lapor_command_sends_pdf_document(
+    client: AsyncClient, app: FastAPI, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sent: list[tuple[int, str]] = []
+    documents: list[tuple[int, str, bytes, str | None]] = []
+
+    async def fake_send_message(self: Bot, chat_id: int, text: str, **_: object) -> None:
+        sent.append((chat_id, text))
+
+    async def fake_send_document(
+        self: Bot, chat_id: int, document: bytes, filename: str, caption: str | None = None,
+        **_: object,
+    ) -> None:
+        documents.append((chat_id, filename, bytes(document), caption))
+
+    monkeypatch.setattr(Bot, "send_message", fake_send_message)
+    monkeypatch.setattr(Bot, "send_document", fake_send_document)
+
+    response = await client.post(
+        "/webhook/telegram/test-secret",
+        json=_text_update(3004, 444555, "/lapor"),
+    )
+    assert response.status_code == 200
+
+    state = app.state.catetin
+    await state.telegram_update_queue.join()
+
+    assert documents, "the /lapor handler should have sent a PDF document"
+    chat_id, filename, content, caption = documents[0]
+    assert chat_id == 444555
+    assert filename.endswith(".pdf")
+    assert content[:5] == b"%PDF-"
+    assert caption is not None and "Laporan" in caption
+
+
 async def test_health_returns_ok(client: AsyncClient) -> None:
     response = await client.get("/health")
     assert response.status_code == 200

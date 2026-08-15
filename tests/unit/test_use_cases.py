@@ -242,6 +242,29 @@ async def test_generate_report_rate_limits_after_five_per_hour(
     assert renderer.calls == 5
 
 
+async def test_generate_report_passes_business_name_period_label_and_top_items(
+    uow: FakeUnitOfWork,
+) -> None:
+    user_id = await _create_user(uow, "4002")
+    async with uow as u:
+        user = await u.users.get_by_id(user_id)
+        assert user is not None
+        u._users[user_id] = user.model_copy(update={"business_name": "Warung Bu Rina"})
+        await u.transactions.add(
+            user_id, _parsed("sale", "Ayam Geprek", 50_000, occurred_on=TODAY)
+        )
+    limiter = FakeRateLimiter()
+    renderer = FakeReportRenderer()
+    use_case = GenerateReport(uow, limiter, renderer)
+
+    await use_case.execute(user_id, TODAY, TODAY, period_label="Laporan 7 Hari Terakhir")
+
+    assert renderer.last_business_name == "Warung Bu Rina"
+    assert renderer.last_period_label == "Laporan 7 Hari Terakhir"
+    assert renderer.last_item_totals is not None
+    assert renderer.last_item_totals[0].item == "Ayam Geprek"
+
+
 # --- Onboarding -------------------------------------------------------------
 
 
