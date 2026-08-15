@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 from alembic.config import Config
 from sqlalchemy.ext.asyncio import AsyncEngine
+from telegram import Bot, User
 
 from alembic import command
 from catetin.adapters.outbound.persistence.engine import (
@@ -15,6 +16,20 @@ from catetin.config import Settings
 from tests.fakes.frozen_clock import FrozenClock
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+@pytest.fixture(autouse=True)
+def _no_real_telegram_network(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The app lifespan calls `PTB Application.initialize()`, which calls
+    `Bot.get_me()` to validate the token — a real Telegram API call. Stub it
+    so building the real app in tests never touches the network."""
+
+    async def fake_get_me(self: Bot, **_: object) -> User:
+        user = User(id=1, first_name="CatetIn", is_bot=True, username="catetin_test_bot")
+        self._bot_user = user
+        return user
+
+    monkeypatch.setattr(Bot, "get_me", fake_get_me)
 
 
 @pytest.fixture

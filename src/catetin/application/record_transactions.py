@@ -12,7 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date
 
-from ..domain.models import Summary, Transaction
+from ..domain.models import ParsedTransaction, Summary, Transaction
 from ..domain.ports.parser import ParserPort
 from ..domain.ports.repositories import UnitOfWork
 
@@ -36,6 +36,7 @@ class RecordIssue:
 class RecordResult:
     recorded: list[Transaction]
     issues: list[RecordIssue]
+    ambiguous: list[ParsedTransaction]
     today_total: Summary
 
 
@@ -65,4 +66,14 @@ class RecordTransactions:
             today_total = await uow.transactions.summarize_range(user_id, today_str, today_str)
             await uow.commit()
 
-        return RecordResult(recorded=recorded, issues=issues, today_total=today_total)
+        return RecordResult(
+            recorded=recorded, issues=issues, ambiguous=ambiguous, today_total=today_total
+        )
+
+    async def confirm(self, user_id: int, parsed: ParsedTransaction) -> Transaction:
+        """Persist a single segment whose kind was ambiguous, now that the user
+        has picked sale/expense via `MessagingPort.ask_choice` (US-08)."""
+        async with self._uow as uow:
+            tx = await uow.transactions.add(user_id, parsed)
+            await uow.commit()
+            return tx

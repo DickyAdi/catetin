@@ -1,4 +1,7 @@
-from sqlalchemy import desc, func, select
+from typing import cast
+
+from sqlalchemy import delete, desc, func, select
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from catetin.domain.models import ParseFailure
@@ -27,3 +30,8 @@ class SqlAlchemyParseFailureRepository:
             ParseFailureRow.created_at >= since_at
         )
         return (await self._session.execute(stmt)).scalar_one()
+
+    async def delete_older_than(self, before_at: int) -> int:
+        stmt = delete(ParseFailureRow).where(ParseFailureRow.created_at < before_at)
+        result = cast(CursorResult, await self._session.execute(stmt))
+        return result.rowcount

@@ -64,3 +64,10 @@ class SqlAlchemyUserRepository:
     async def count_total(self) -> int:
         stmt = select(func.count()).select_from(UserRow)
         return (await self._session.execute(stmt)).scalar_one()
+
+    async def list_digest_enabled(self) -> list[User]:
+        stmt = select(UserRow).where(
+            UserRow.digest_enabled == 1, UserRow.blocked_at.is_(None)
+        )
+        rows = (await self._session.execute(stmt)).scalars().all()
+        return [user_to_domain(row) for row in rows]

@@ -13,7 +13,10 @@ from typing import cast
 
 from fastapi import FastAPI
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
+from telegram.ext import Application as TelegramApplication
 
+from .adapters.inbound.telegram import application as telegram_app
+from .adapters.inbound.telegram import handlers as telegram_handlers
 from .adapters.outbound.parsing.regex_parser import RegexParser
 from .adapters.outbound.persistence.engine import (
     create_reader_engine,
@@ -25,12 +28,14 @@ from .adapters.outbound.persistence.repositories.rate_limit.rate_limiter import 
 )
 from .adapters.outbound.persistence.uow import SqlAlchemyUnitOfWork
 from .adapters.outbound.system_clock import SystemClock
+from .adapters.outbound.telegram.sender import TelegramSender
 from .application.manage_transactions import ManageTransactions
 from .application.onboarding import Onboarding
 from .application.record_transactions import RecordTransactions
 from .application.summarize import Summarize
 from .config import Settings
 from .domain.ports.clock import ClockPort
+from .domain.ports.messaging import MessagingPort
 from .domain.ports.parser import ParserPort
 from .domain.ports.repositories import RateLimiterPort, UnitOfWork
 
@@ -50,10 +55,13 @@ class Dependencies:
     rate_limiter: RateLimiterPort
     uow: UnitOfWork
     reader_uow_factory: Callable[[], UnitOfWork]
+    writer_uow_factory: Callable[[], UnitOfWork]
     onboarding: Onboarding
     record_transactions: RecordTransactions
     manage_transactions: ManageTransactions
     summarize: Summarize
+    messaging: MessagingPort
+    telegram_application: TelegramApplication
 
 
 def create_engines(settings: Settings) -> Engines:
@@ -73,14 +81,48 @@ def wire(settings: Settings, engines: Engines) -> Dependencies:
     clock = SystemClock()
     parser = RegexParser()
     rate_limiter = SqliteRateLimiter(engines.writer_sessions, clock)
-    uow = cast(UnitOfWork, SqlAlchemyUnitOfWork(engines.writer_sessions, clock))
 
     def reader_uow_factory() -> UnitOfWork:
-        # A fresh UoW per call (not a shared instance, unlike `uow` above) — ops
-        # stats reads can be concurrent, and SqlAlchemyUnitOfWork stores its
-        # session on `self`, so sharing one instance across concurrent callers
-        # would race.
+        # A fresh UoW per call (not a shared instance) — ops stats reads can be
+        # concurrent, and SqlAlchemyUnitOfWork stores its session on `self`, so
+        # sharing one instance across concurrent callers would race.
         return cast(UnitOfWork, SqlAlchemyUnitOfWork(engines.reader_sessions, clock))
+
+    def writer_uow_factory() -> UnitOfWork:
+        # Same reasoning as `reader_uow_factory`: every caller that can run
+        # concurrently with the Telegram handler loop (the webhook route's own
+        # durable-enqueue bookkeeping, inbox replay, the scheduler task) needs
+        # its own session rather than sharing the `uow` instance below. The
+        # writer engine's `pool_size=1` is what actually serializes concurrent
+        # writers at the connection level — sharing one mutable UnitOfWork
+        # object across concurrent `async with` blocks would instead race on
+        # `self.session` itself (see git history for the bug this fixed).
+        return cast(UnitOfWork, SqlAlchemyUnitOfWork(engines.writer_sessions, clock))
+
+    # Shared by the Telegram use cases below only: PTB's fetcher loop processes
+    # updates one at a time (no `concurrent_updates`), so sequential re-entry
+    # of this single instance from within one handler invocation is safe.
+    uow = writer_uow_factory()
+
+    onboarding = Onboarding(uow)
+    record_transactions = RecordTransactions(parser, uow)
+    manage_transactions = ManageTransactions(uow)
+    summarize = Summarize(uow)
+
+    # The inbound Application and the outbound sender share one PTB Bot
+    # instance (`application.bot`) — no second token, no second connection
+    # pool. Handlers read their dependencies from `bot_data["deps"]`.
+    application = telegram_app.build_application(settings)
+    messaging = cast(MessagingPort, TelegramSender(application.bot, reader_uow_factory))
+    application.bot_data["deps"] = telegram_handlers.TelegramDeps(
+        onboarding=onboarding,
+        record_transactions=record_transactions,
+        manage_transactions=manage_transactions,
+        summarize=summarize,
+        messaging=messaging,
+        clock=clock,
+        default_timezone=settings.timezone,
+    )
 
     return Dependencies(
         clock=clock,
@@ -88,10 +130,13 @@ def wire(settings: Settings, engines: Engines) -> Dependencies:
         rate_limiter=rate_limiter,
         uow=uow,
         reader_uow_factory=reader_uow_factory,
-        onboarding=Onboarding(uow),
-        record_transactions=RecordTransactions(parser, uow),
-        manage_transactions=ManageTransactions(uow),
-        summarize=Summarize(uow),
+        writer_uow_factory=writer_uow_factory,
+        onboarding=onboarding,
+        record_transactions=record_transactions,
+        manage_transactions=manage_transactions,
+        summarize=summarize,
+        messaging=messaging,
+        telegram_application=application,
     )
 
 

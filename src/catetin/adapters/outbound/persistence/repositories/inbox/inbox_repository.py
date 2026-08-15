@@ -1,6 +1,6 @@
 from typing import cast
 
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -42,3 +42,10 @@ class SqlAlchemyInboxRepository:
     async def count_unprocessed(self) -> int:
         stmt = select(func.count()).select_from(InboxRow).where(InboxRow.processed_at.is_(None))
         return (await self._session.execute(stmt)).scalar_one()
+
+    async def delete_processed_older_than(self, before_at: int) -> int:
+        stmt = delete(InboxRow).where(
+            InboxRow.processed_at.is_not(None), InboxRow.processed_at < before_at
+        )
+        result = cast(CursorResult, await self._session.execute(stmt))
+        return result.rowcount

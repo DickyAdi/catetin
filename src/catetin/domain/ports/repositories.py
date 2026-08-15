@@ -31,6 +31,8 @@ class UserRepository(Protocol):
 
     async def count_total(self) -> int: ...  # instance-wide, for ops stats
 
+    async def list_digest_enabled(self) -> list[User]: ...  # instance-wide, for the nightly digest
+
 
 class TransactionRepository(Protocol):
     async def add(self, user_id: int, parsed: ParsedTransaction) -> Transaction: ...
@@ -68,6 +70,8 @@ class InboxRepository(Protocol):
 
     async def count_unprocessed(self) -> int: ...  # for ops stats
 
+    async def delete_processed_older_than(self, before_at: int) -> int: ...  # returns rows deleted
+
 
 class ParseFailureRepository(Protocol):
     async def add(self, user_id: int | None, raw_text: str, reason: str) -> ParseFailure: ...
@@ -75,6 +79,8 @@ class ParseFailureRepository(Protocol):
     async def list_recent(self, limit: int = 50) -> list[ParseFailure]: ...
 
     async def count_since(self, since_at: int) -> int: ...  # for ops stats
+
+    async def delete_older_than(self, before_at: int) -> int: ...  # returns rows deleted
 
 
 class RateLimiterPort(Protocol):

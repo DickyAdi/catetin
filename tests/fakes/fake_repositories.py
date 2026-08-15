@@ -80,6 +80,11 @@ class FakeUserRepository:
     async def count_total(self) -> int:
         return len(self._users)
 
+    async def list_digest_enabled(self) -> list[User]:
+        return [
+            u for u in self._users.values() if u.digest_enabled and u.blocked_at is None
+        ]
+
 
 class FakeTransactionRepository:
     def __init__(self, clock: ClockPort, rows: list[Transaction]) -> None:
@@ -212,6 +217,16 @@ class FakeInboxRepository:
     async def count_unprocessed(self) -> int:
         return sum(1 for _, processed_at in self._rows.values() if processed_at is None)
 
+    async def delete_processed_older_than(self, before_at: int) -> int:
+        stale = [
+            update_id
+            for update_id, (_, processed_at) in self._rows.items()
+            if processed_at is not None and processed_at < before_at
+        ]
+        for update_id in stale:
+            del self._rows[update_id]
+        return len(stale)
+
 
 class FakeParseFailureRepository:
     def __init__(self, clock: ClockPort, rows: list[ParseFailure]) -> None:
@@ -237,6 +252,12 @@ class FakeParseFailureRepository:
 
     async def count_since(self, since_at: int) -> int:
         return sum(1 for f in self._rows if f.created_at >= since_at)
+
+    async def delete_older_than(self, before_at: int) -> int:
+        stale = [f for f in self._rows if f.created_at < before_at]
+        for f in stale:
+            self._rows.remove(f)
+        return len(stale)
 
 
 class FakeUnitOfWork:

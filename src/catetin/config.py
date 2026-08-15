@@ -28,3 +28,7 @@ class Settings(BaseSettings):
     pdf_max_per_user_hour: int = 5
     digest_enabled_default: bool = True
     timezone: str = "Asia/Jakarta"
+
+    digest_hour_local: int = 21
+    backup_dir: str = "./backups"
+    backup_keep_n: int = 7

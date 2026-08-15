@@ -4,6 +4,7 @@ Routes read from this instead of poking at `composition.py` directly — the
 composition root stays the only place adapters are constructed.
 """
 
+import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
@@ -26,6 +27,10 @@ class AppState:
     started_at: float
     reader_uow_factory: Callable[[], UnitOfWork]
     on_webhook_update: Callable[[bytes], Awaitable[None]] | None = None
+    # Exposed so tests can `await telegram_update_queue.join()` for a
+    # deterministic wait on PTB's (blocking-by-default) handler dispatch,
+    # instead of a fixed sleep.
+    telegram_update_queue: "asyncio.Queue[object] | None" = None
 
 
 def get_state(request: Request) -> AppState:

@@ -10,11 +10,29 @@ from collections.abc import AsyncIterator
 import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
+from telegram import Bot
 
 from catetin import composition
 from catetin.adapters.inbound.http import create_http_app
 from catetin.adapters.inbound.http.state import AppState
 from catetin.config import Settings
+
+
+def _text_update(update_id: int, user_id: int, text: str) -> dict:
+    message: dict = {
+        "message_id": update_id,
+        "from": {"id": user_id, "is_bot": False, "first_name": "Rina"},
+        "chat": {"id": user_id, "type": "private"},
+        "date": int(time.time()),
+        "text": text,
+    }
+    if text.startswith("/"):
+        # Real Telegram tags slash-commands with a `bot_command` entity —
+        # without it PTB's CommandHandler falls through and treats the text
+        # as a plain message (see CommandHandler.check_update).
+        length = len(text.split(maxsplit=1)[0])
+        message["entities"] = [{"type": "bot_command", "offset": 0, "length": length}]
+    return {"update_id": update_id, "message": message}
 
 
 @pytest.fixture
@@ -40,6 +58,82 @@ async def test_webhook_correct_secret_returns_accepted(client: AsyncClient) -> N
 async def test_webhook_wrong_secret_returns_forbidden(client: AsyncClient) -> None:
     response = await client.post("/webhook/telegram/wrong-secret", json={"update_id": 1})
     assert response.status_code == 403
+
+
+async def test_webhook_text_message_is_dispatched_to_the_telegram_handler(
+    client: AsyncClient, app: FastAPI, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """End-to-end: durable enqueue -> PTB dispatch -> record_transactions ->
+    a reply via `MessagingPort`. `Bot.send_message` is stubbed (no real
+    Telegram network call, per conftest's ban on it) so the assertion is on
+    what the fake captured, not on a raw HTTP call to Telegram.
+    """
+    sent: list[tuple[int, str]] = []
+
+    async def fake_send_message(self: Bot, chat_id: int, text: str, **_: object) -> None:
+        sent.append((chat_id, text))
+
+    monkeypatch.setattr(Bot, "send_message", fake_send_message)
+
+    response = await client.post(
+        "/webhook/telegram/test-secret",
+        json=_text_update(3001, 555444, "jual ayam geprek 50rb"),
+    )
+    assert response.status_code == 200
+    assert response.json() == {"accepted": True}
+
+    state = app.state.catetin
+    assert state.telegram_update_queue is not None
+    await state.telegram_update_queue.join()
+
+    assert sent, "the handler should have replied via MessagingPort"
+    assert "50.000" in sent[0][1]
+
+
+async def test_webhook_start_command_sends_welcome_message(
+    client: AsyncClient, app: FastAPI, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sent: list[tuple[int, str]] = []
+
+    async def fake_send_message(self: Bot, chat_id: int, text: str, **_: object) -> None:
+        sent.append((chat_id, text))
+
+    monkeypatch.setattr(Bot, "send_message", fake_send_message)
+
+    response = await client.post(
+        "/webhook/telegram/test-secret", json=_text_update(3002, 777888, "/start")
+    )
+    assert response.status_code == 200
+
+    state = app.state.catetin
+    await state.telegram_update_queue.join()
+
+    assert sent
+    assert "CatetIn" in sent[0][1]
+
+
+async def test_webhook_duplicate_update_id_is_not_reprocessed(
+    client: AsyncClient, app: FastAPI, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sent: list[tuple[int, str]] = []
+
+    async def fake_send_message(self: Bot, chat_id: int, text: str, **_: object) -> None:
+        sent.append((chat_id, text))
+
+    monkeypatch.setattr(Bot, "send_message", fake_send_message)
+
+    payload = _text_update(3003, 999000, "/start")
+    state = app.state.catetin
+
+    first = await client.post("/webhook/telegram/test-secret", json=payload)
+    assert first.status_code == 200
+    await state.telegram_update_queue.join()
+    assert len(sent) == 1
+
+    second = await client.post("/webhook/telegram/test-secret", json=payload)
+    assert second.status_code == 200
+    await state.telegram_update_queue.join()
+    assert len(sent) == 1  # the duplicate update_id was not re-dispatched
 
 
 async def test_health_returns_ok(client: AsyncClient) -> None:
