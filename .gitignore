@@ -238,3 +238,6 @@ backups/*
 apps/web/node_modules/
 apps/web/dist/
 apps/web/.vite/
+
+# Claude Design reference exports — local design docs, never committed
+apps/web/references/design/
