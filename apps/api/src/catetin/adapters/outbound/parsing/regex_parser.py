@@ -18,7 +18,7 @@ from datetime import date
 from typing import Literal
 
 from ....domain.models import FailedSegment, ParsedTransaction, ParseOutcome
-from . import amounts, lexicon, segmenter
+from . import amounts, high_signal, lexicon, segmenter
 
 Kind = Literal["sale", "expense"] | None
 
@@ -140,6 +140,7 @@ def _parse_segment(raw_segment: str, today: date) -> ParsedTransaction | FailedS
         occurred_on=today,
         confidence=confidence,
         raw_text=raw_segment[:500],
+        flagged=high_signal.is_high_signal(raw_segment),
     )
 
 

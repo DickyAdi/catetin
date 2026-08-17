@@ -10,13 +10,13 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from datetime import timedelta
+from datetime import date, timedelta
 
 from catetin.adapters.outbound.reporting.text_renderer import (
     render_day_totals,
     render_text,
 )
-from catetin.application.generate_report import GenerateReport
+from catetin.application.generate_report import GenerateReport, PendingReview
 from catetin.application.manage_transactions import ManageTransactions
 from catetin.application.onboarding import Onboarding
 from catetin.application.record_transactions import RecordTransactions
@@ -35,7 +35,23 @@ _logger = logging.getLogger("catetin.telegram.handlers")
 WEEK_DAYS = 7
 CHOICE_SALE = "Jual"
 CHOICE_EXPENSE = "Beli"
+CHOICE_OTHER = "Bukan Usaha"
 _KIND_BY_CHOICE = {CHOICE_SALE: "sale", CHOICE_EXPENSE: "expense"}
+
+REPORT_PERIOD_LABEL = "Laporan 7 Hari Terakhir"
+REVIEW_EXCLUDE_PREFIX = "review_exclude:"
+REVIEW_KEEP_PREFIX = "review_keep:"
+_REVIEW_SHOW_LIMIT = 20
+
+
+def _rupiah(amount: int) -> str:
+    sign = "-" if amount < 0 else ""
+    return f"{sign}Rp {abs(amount):,}".replace(",", ".")
+
+
+def _short_date(occurred_on: str) -> str:
+    _, month, day = occurred_on.split("-")
+    return f"{day}/{month}"
 
 
 @dataclass
@@ -71,7 +87,7 @@ async def _ask_next_pending(deps: TelegramDeps, user: User) -> None:
         return
     next_item = pending[0]
     prompt = f'"{next_item.item}" itu pemasukan atau pengeluaran?'
-    await deps.messaging.ask_choice(user.id, prompt, [CHOICE_SALE, CHOICE_EXPENSE])
+    await deps.messaging.ask_choice(user.id, prompt, [CHOICE_SALE, CHOICE_EXPENSE, CHOICE_OTHER])
 
 
 async def on_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -127,7 +143,8 @@ async def on_list(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     for i, tx in enumerate(transactions, start=1):
         marker = "+" if tx.kind == "sale" else "-"
         amount = f"{marker}Rp {tx.total_amount:,}".replace(",", ".")
-        lines.append(f"{i}. [{tx.id}] {amount} {tx.item} ({tx.occurred_on})")
+        prefix = "🚫 " if tx.excluded_from_report else ""
+        lines.append(f"{i}. {prefix}[{tx.id}] {amount} {tx.item} ({tx.occurred_on})")
     await deps.messaging.send_text(user.id, "\n".join(lines))
 
 
@@ -147,7 +164,10 @@ async def on_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def on_report(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """`/lapor` — PDF report over the last 7 days, sent as a document."""
+    """`/lapor` — PDF report over the last 7 days, sent as a document.
+
+    FR-2: if the period has flagged-but-undecided transactions, a review
+    gate is shown first instead of the PDF (see `_send_review_gate`)."""
     deps = _deps(context)
     cmd = map_update(update)
     if cmd is None:
@@ -158,7 +178,7 @@ async def on_report(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     try:
         result = await deps.generate_report.execute(
-            user.id, start, today, period_label="Laporan 7 Hari Terakhir"
+            user.id, start, today, period_label=REPORT_PERIOD_LABEL
         )
     except RateLimited:
         await deps.messaging.send_text(
@@ -166,9 +186,71 @@ async def on_report(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         )
         return
 
+    if isinstance(result, PendingReview):
+        await _send_review_gate(deps, user, result)
+        return
+
     filename = f"laporan-{start.isoformat()}-{today.isoformat()}.pdf"
     await deps.messaging.send_document(
-        user.id, filename, result.pdf_bytes, caption="📊 Laporan 7 Hari Terakhir"
+        user.id, filename, result.pdf_bytes, caption=f"📊 {REPORT_PERIOD_LABEL}"
+    )
+
+
+async def _send_review_gate(
+    deps: TelegramDeps, user: User, pending: PendingReview
+) -> None:
+    totals_line = (
+        f"Total: Pemasukan {_rupiah(pending.summary.income)} "
+        f"· Pengeluaran {_rupiah(pending.summary.expense)}"
+    )
+    lines = [
+        f"📊 {pending.period_label} siap.",
+        totals_line,
+        "",
+        f"⚠️ {len(pending.flagged_items)} transaksi terlihat bukan usaha:",
+    ]
+    shown = pending.flagged_items[:_REVIEW_SHOW_LIMIT]
+    for tx in shown:
+        marker = "+" if tx.kind == "sale" else "-"
+        label = tx.raw_text or tx.item
+        lines.append(f"• {_short_date(tx.occurred_on)} {label} ({marker}{_rupiah(tx.total_amount)})")
+    remaining = len(pending.flagged_items) - len(shown)
+    if remaining > 0:
+        lines.append(f"dan {remaining} lainnya")
+
+    start_iso = pending.start.isoformat()
+    end_iso = pending.end.isoformat()
+    buttons = [
+        ("Keluarkan dari laporan", f"{REVIEW_EXCLUDE_PREFIX}{start_iso}:{end_iso}"),
+        ("Tetap masukkan", f"{REVIEW_KEEP_PREFIX}{start_iso}:{end_iso}"),
+    ]
+    await deps.messaging.ask_action(user.id, "\n".join(lines), buttons)
+
+
+async def _handle_review_callback(deps: TelegramDeps, update: Update, data: str) -> None:
+    if update.effective_user is None:
+        return
+    user = await deps.onboarding.get_or_create_user(
+        "telegram", str(update.effective_user.id), update.effective_user.full_name
+    )
+
+    exclude = data.startswith(REVIEW_EXCLUDE_PREFIX)
+    payload = data.removeprefix(REVIEW_EXCLUDE_PREFIX if exclude else REVIEW_KEEP_PREFIX)
+    try:
+        start_str, end_str = payload.split(":")
+        start = date.fromisoformat(start_str)
+        end = date.fromisoformat(end_str)
+    except ValueError:
+        await deps.messaging.send_text(user.id, "Sesi kedaluwarsa, coba /lapor lagi ya.")
+        return
+
+    if exclude:
+        await deps.generate_report.exclude_flagged(user.id, start, end)
+
+    result = await deps.generate_report.render(user.id, start, end, period_label=REPORT_PERIOD_LABEL)
+    filename = f"laporan-{start.isoformat()}-{end.isoformat()}.pdf"
+    await deps.messaging.send_document(
+        user.id, filename, result.pdf_bytes, caption=f"📊 {REPORT_PERIOD_LABEL}"
     )
 
 
@@ -263,10 +345,14 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     await query.answer()
 
     data = query.data or ""
+
+    if data.startswith((REVIEW_EXCLUDE_PREFIX, REVIEW_KEEP_PREFIX)):
+        await _handle_review_callback(deps, update, data)
+        return
+
     if not data.startswith("choice:"):
         return
     choice = data.removeprefix("choice:")
-    kind = _KIND_BY_CHOICE.get(choice)
 
     user = await deps.onboarding.get_or_create_user(
         "telegram", str(update.effective_user.id), update.effective_user.full_name
@@ -280,6 +366,16 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     if not pending:
         del deps.pending_choices[user.id]
 
+    if choice == CHOICE_OTHER:
+        # FR-3: "Bukan Usaha" — record with kind=default (sale, per Q3),
+        # never flagged (the user has already made the call), excluded.
+        resolved = parsed.model_copy(update={"kind": "sale", "flagged": False})
+        await deps.record_transactions.confirm(user.id, resolved, excluded_from_report=True)
+        await deps.messaging.send_text(user.id, "Oke, gak dimasukkan ke laporan usaha.")
+        await _ask_next_pending(deps, user)
+        return
+
+    kind = _KIND_BY_CHOICE.get(choice)
     if kind is None:
         await deps.messaging.send_text(user.id, "Pilihan tidak dikenal.")
         return

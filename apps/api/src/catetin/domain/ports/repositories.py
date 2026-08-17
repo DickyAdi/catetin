@@ -35,7 +35,9 @@ class UserRepository(Protocol):
 
 
 class TransactionRepository(Protocol):
-    async def add(self, user_id: int, parsed: ParsedTransaction) -> Transaction: ...
+    async def add(
+        self, user_id: int, parsed: ParsedTransaction, *, excluded_from_report: bool = False
+    ) -> Transaction: ...
 
     async def batch_add(
         self, user_id: int, parsed: list[ParsedTransaction]
@@ -54,6 +56,18 @@ class TransactionRepository(Protocol):
     ) -> list[DayTotal]: ...
 
     async def top_items(self, user_id: int, kind: str, limit: int = 10) -> list[ItemTotal]: ...
+
+    async def list_flagged(
+        self, user_id: int, start_date: str, end_date: str
+    ) -> list[Transaction]: ...  # flagged=1, excluded=0, not deleted — review gate (FR-2)
+
+    async def exclude_flagged(
+        self, user_id: int, start_date: str, end_date: str
+    ) -> int: ...  # bulk-set excluded_from_report=1 on flagged rows; returns count
+
+    async def list_in_period(
+        self, user_id: int, start_date: str, end_date: str
+    ) -> list[Transaction]: ...  # excluded=0, includes soft-deleted — PDF audit trail (FR-5)
 
     # instance-wide (all users), for ops stats
     async def count_by_occurred_on(self, occurred_on: str) -> int: ...

@@ -97,7 +97,9 @@ class FakeTransactionRepository:
     def _live(self, user_id: int) -> list[Transaction]:
         return [t for t in self._rows if t.user_id == user_id and t.deleted_at is None]
 
-    async def add(self, user_id: int, parsed: ParsedTransaction) -> Transaction:
+    async def add(
+        self, user_id: int, parsed: ParsedTransaction, *, excluded_from_report: bool = False
+    ) -> Transaction:
         if parsed.kind is None:
             raise DomainValidationError(
                 "cannot persist a ParsedTransaction with an ambiguous kind"
@@ -116,6 +118,8 @@ class FakeTransactionRepository:
             confidence=parsed.confidence,
             raw_text=parsed.raw_text,
             created_at=now,
+            flagged=parsed.flagged,
+            excluded_from_report=excluded_from_report,
         )
         self._rows.append(tx)
         return tx
@@ -145,9 +149,12 @@ class FakeTransactionRepository:
         self._rows[idx] = updated
         return updated
 
+    def _reportable(self, user_id: int) -> list[Transaction]:
+        return [t for t in self._live(user_id) if not t.excluded_from_report]
+
     async def summarize_range(self, user_id: int, start_date: str, end_date: str) -> Summary:
         income = expense = count = 0
-        for t in self._live(user_id):
+        for t in self._reportable(user_id):
             if start_date <= t.occurred_on <= end_date:
                 count += 1
                 if t.kind == "sale":
@@ -160,7 +167,7 @@ class FakeTransactionRepository:
         self, user_id: int, start_date: str, end_date: str
     ) -> list[DayTotal]:
         totals: dict[str, list[int]] = {}
-        for t in self._live(user_id):
+        for t in self._reportable(user_id):
             if start_date <= t.occurred_on <= end_date:
                 bucket = totals.setdefault(t.occurred_on, [0, 0])
                 if t.kind == "sale":
@@ -174,11 +181,47 @@ class FakeTransactionRepository:
 
     async def top_items(self, user_id: int, kind: str, limit: int = 10) -> list[ItemTotal]:
         totals: dict[str, int] = {}
-        for t in self._live(user_id):
+        for t in self._reportable(user_id):
             if t.kind == kind:
                 totals[t.item] = totals.get(t.item, 0) + t.total_amount
         ranked = sorted(totals.items(), key=lambda kv: kv[1], reverse=True)
         return [ItemTotal(item=item, kind=kind, total=total) for item, total in ranked[:limit]]
+
+    async def list_flagged(
+        self, user_id: int, start_date: str, end_date: str
+    ) -> list[Transaction]:
+        rows = [
+            t
+            for t in self._live(user_id)
+            if t.flagged and not t.excluded_from_report and start_date <= t.occurred_on <= end_date
+        ]
+        return sorted(rows, key=lambda t: t.occurred_at)
+
+    async def exclude_flagged(self, user_id: int, start_date: str, end_date: str) -> int:
+        count = 0
+        for i, t in enumerate(self._rows):
+            if (
+                t.user_id == user_id
+                and t.deleted_at is None
+                and t.flagged
+                and not t.excluded_from_report
+                and start_date <= t.occurred_on <= end_date
+            ):
+                self._rows[i] = t.model_copy(update={"excluded_from_report": True})
+                count += 1
+        return count
+
+    async def list_in_period(
+        self, user_id: int, start_date: str, end_date: str
+    ) -> list[Transaction]:
+        rows = [
+            t
+            for t in self._rows
+            if t.user_id == user_id
+            and not t.excluded_from_report
+            and start_date <= t.occurred_on <= end_date
+        ]
+        return sorted(rows, key=lambda t: t.occurred_at)
 
     async def count_by_occurred_on(self, occurred_on: str) -> int:
         return sum(
@@ -318,18 +361,24 @@ class FakeReportRenderer:
         self.last_business_name: str | None = None
         self.last_period_label: str | None = None
         self.last_item_totals: list[ItemTotal] | None = None
+        self.last_expense_item_totals: list[ItemTotal] | None = None
+        self.last_transactions: list[Transaction] | None = None
 
     async def render_pdf(
         self,
         user_id: int,
         summary: Summary,
         day_totals: list[DayTotal],
-        item_totals: list[ItemTotal],
+        sale_item_totals: list[ItemTotal],
+        expense_item_totals: list[ItemTotal],
+        transactions: list[Transaction],
         business_name: str | None,
         period_label: str,
     ) -> bytes:
         self.calls += 1
         self.last_business_name = business_name
         self.last_period_label = period_label
-        self.last_item_totals = item_totals
+        self.last_item_totals = sale_item_totals
+        self.last_expense_item_totals = expense_item_totals
+        self.last_transactions = transactions
         return self._pdf_bytes

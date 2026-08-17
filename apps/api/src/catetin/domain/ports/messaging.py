@@ -16,3 +16,12 @@ class MessagingPort(Protocol):
     ) -> None: ...
 
     async def ask_choice(self, user_id: int, prompt: str, options: list[str]) -> None: ...
+
+    async def ask_action(
+        self, user_id: int, prompt: str, buttons: list[tuple[str, str]]
+    ) -> None:
+        """Like `ask_choice`, but each button carries its own opaque
+        `callback_data` (label, data) instead of deriving it from the label —
+        needed where the choice must encode state statelessly (FR-2 review
+        gate: the report period, so no server-side session is kept)."""
+        ...

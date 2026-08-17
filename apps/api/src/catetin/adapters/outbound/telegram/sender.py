@@ -105,3 +105,14 @@ class TelegramSender:
         await self._send(
             chat_id, lambda: self._bot.send_message(chat_id, prompt, reply_markup=keyboard)
         )
+
+    async def ask_action(self, user_id: int, prompt: str, buttons: list[tuple[str, str]]) -> None:
+        chat_id = await self._resolve_chat_id(user_id)
+        if chat_id is None:
+            return
+        keyboard = InlineKeyboardMarkup(
+            [[InlineKeyboardButton(label, callback_data=data) for label, data in buttons]]
+        )
+        await self._send(
+            chat_id, lambda: self._bot.send_message(chat_id, prompt, reply_markup=keyboard)
+        )

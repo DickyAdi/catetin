@@ -27,10 +27,18 @@ class AskedChoice:
 
 
 @dataclass
+class AskedAction:
+    user_id: int
+    prompt: str
+    buttons: list[tuple[str, str]]
+
+
+@dataclass
 class FakeMessaging:
     texts: list[SentText] = field(default_factory=list)
     documents: list[SentDocument] = field(default_factory=list)
     choices: list[AskedChoice] = field(default_factory=list)
+    actions: list[AskedAction] = field(default_factory=list)
 
     async def send_text(self, user_id: int, text: str) -> None:
         self.texts.append(SentText(user_id=user_id, text=text))
@@ -44,3 +52,8 @@ class FakeMessaging:
 
     async def ask_choice(self, user_id: int, prompt: str, options: list[str]) -> None:
         self.choices.append(AskedChoice(user_id=user_id, prompt=prompt, options=options))
+
+    async def ask_action(
+        self, user_id: int, prompt: str, buttons: list[tuple[str, str]]
+    ) -> None:
+        self.actions.append(AskedAction(user_id=user_id, prompt=prompt, buttons=buttons))

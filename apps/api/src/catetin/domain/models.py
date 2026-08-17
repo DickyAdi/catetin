@@ -44,6 +44,8 @@ class Transaction(BaseModel):
     raw_text: str | None = Field(default=None, max_length=500)
     created_at: int
     deleted_at: int | None = None
+    flagged: bool = False
+    excluded_from_report: bool = False
 
     @field_validator("occurred_on")
     @classmethod
@@ -62,6 +64,7 @@ class ParsedTransaction(BaseModel):
     occurred_on: date  # user-local
     confidence: float = Field(ge=0.0, le=1.0)
     raw_text: str = Field(max_length=500)
+    flagged: bool = False
 
     @field_validator("item")
     @classmethod

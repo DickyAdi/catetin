@@ -7,7 +7,11 @@ from datetime import UTC, date, datetime
 
 import pytest
 
-from catetin.application.generate_report import GenerateReport
+from catetin.application.generate_report import (
+    GenerateReport,
+    PendingReview,
+    ReportResult,
+)
 from catetin.application.manage_transactions import ManageTransactions
 from catetin.application.onboarding import Onboarding
 from catetin.application.record_transactions import RecordTransactions
@@ -47,6 +51,7 @@ def _parsed(
     raw_text: str | None = None,
     occurred_on: date = TODAY,
     confidence: float = 1.0,
+    flagged: bool = False,
 ) -> ParsedTransaction:
     return ParsedTransaction(
         kind=kind,  # type: ignore[arg-type]
@@ -57,6 +62,7 @@ def _parsed(
         occurred_on=occurred_on,
         confidence=confidence,
         raw_text=raw_text or f"{item} {total_amount}",
+        flagged=flagged,
     )
 
 
@@ -266,6 +272,145 @@ async def test_generate_report_passes_business_name_period_label_and_top_items(
 
 
 # --- Onboarding -------------------------------------------------------------
+
+
+async def test_generate_report_direct_renders_when_nothing_flagged(
+    uow: FakeUnitOfWork,
+) -> None:
+    user_id = await _create_user(uow, "4003")
+    async with uow as u:
+        await u.transactions.add(user_id, _parsed("sale", "Ayam", 50_000, occurred_on=TODAY))
+    limiter = FakeRateLimiter()
+    renderer = FakeReportRenderer()
+    use_case = GenerateReport(uow, limiter, renderer)
+
+    result = await use_case.execute(user_id, TODAY, TODAY)
+
+    assert isinstance(result, ReportResult)
+    assert renderer.calls == 1
+
+
+async def test_generate_report_returns_pending_review_when_flagged_present(
+    uow: FakeUnitOfWork,
+) -> None:
+    user_id = await _create_user(uow, "4004")
+    async with uow as u:
+        await u.transactions.add(user_id, _parsed("sale", "Ayam", 50_000, occurred_on=TODAY))
+        await u.transactions.add(
+            user_id,
+            _parsed("sale", "Dapet Duit", 10_000, occurred_on=TODAY, flagged=True),
+        )
+    limiter = FakeRateLimiter()
+    renderer = FakeReportRenderer()
+    use_case = GenerateReport(uow, limiter, renderer)
+
+    result = await use_case.execute(user_id, TODAY, TODAY, period_label="Laporan")
+
+    assert isinstance(result, PendingReview)
+    assert len(result.flagged_items) == 1
+    assert result.flagged_items[0].item == "Dapet Duit"
+    assert result.summary.income == 60_000  # flag != exclude, still counted
+    assert renderer.calls == 0  # no render happened yet
+
+
+async def test_generate_report_exclude_flagged_then_render_is_clean(
+    uow: FakeUnitOfWork,
+) -> None:
+    user_id = await _create_user(uow, "4005")
+    async with uow as u:
+        await u.transactions.add(user_id, _parsed("sale", "Ayam", 50_000, occurred_on=TODAY))
+        await u.transactions.add(
+            user_id,
+            _parsed("sale", "Dapet Duit", 10_000, occurred_on=TODAY, flagged=True),
+        )
+    limiter = FakeRateLimiter()
+    renderer = FakeReportRenderer()
+    use_case = GenerateReport(uow, limiter, renderer)
+
+    pending = await use_case.execute(user_id, TODAY, TODAY)
+    assert isinstance(pending, PendingReview)
+
+    excluded_count = await use_case.exclude_flagged(user_id, TODAY, TODAY)
+    assert excluded_count == 1
+
+    result = await use_case.render(user_id, TODAY, TODAY)
+    assert result.summary.income == 50_000
+    assert renderer.calls == 1
+
+
+async def test_generate_report_keep_renders_with_everything(
+    uow: FakeUnitOfWork,
+) -> None:
+    user_id = await _create_user(uow, "4006")
+    async with uow as u:
+        await u.transactions.add(user_id, _parsed("sale", "Ayam", 50_000, occurred_on=TODAY))
+        await u.transactions.add(
+            user_id,
+            _parsed("sale", "Dapet Duit", 10_000, occurred_on=TODAY, flagged=True),
+        )
+    limiter = FakeRateLimiter()
+    renderer = FakeReportRenderer()
+    use_case = GenerateReport(uow, limiter, renderer)
+
+    pending = await use_case.execute(user_id, TODAY, TODAY)
+    assert isinstance(pending, PendingReview)
+
+    result = await use_case.render(user_id, TODAY, TODAY)
+    assert result.summary.income == 60_000  # "Tetap masukkan" — nothing excluded
+    assert renderer.calls == 1
+
+
+async def test_generate_report_rate_limit_checked_once_before_review_gate(
+    uow: FakeUnitOfWork,
+) -> None:
+    """NFR / FR-2: the rate-limit check happens on the initial `execute()`
+    call, not again on the `render()` that follows a review decision."""
+    user_id = await _create_user(uow, "4007")
+    async with uow as u:
+        await u.transactions.add(
+            user_id,
+            _parsed("sale", "Dapet Duit", 10_000, occurred_on=TODAY, flagged=True),
+        )
+    limiter = FakeRateLimiter()
+    renderer = FakeReportRenderer()
+    use_case = GenerateReport(uow, limiter, renderer, max_per_user_hour=1)
+
+    pending = await use_case.execute(user_id, TODAY, TODAY)
+    assert isinstance(pending, PendingReview)
+
+    # A second execute() would now be rate-limited, but render() (used after
+    # the user's review decision) does not re-check the limiter.
+    result = await use_case.render(user_id, TODAY, TODAY)
+    assert result.summary.income == 10_000
+
+    with pytest.raises(RateLimited):
+        await use_case.execute(user_id, TODAY, TODAY)
+
+
+# --- RecordTransactions.confirm — "Bukan Usaha" (FR-3) ----------------------
+
+
+async def test_confirm_bukan_usaha_records_excluded_and_not_flagged(
+    uow: FakeUnitOfWork,
+) -> None:
+    user_id = await _create_user(uow, "4501")
+    parsed = _parsed(None, "Gajian", 2_000_000, flagged=True)
+    use_case = RecordTransactions(FakeParser(), uow)
+
+    resolved = parsed.model_copy(update={"kind": "sale", "flagged": False})
+    tx = await use_case.confirm(user_id, resolved, excluded_from_report=True)
+
+    assert tx.kind == "sale"
+    assert tx.flagged is False
+    assert tx.excluded_from_report is True
+
+    summary = await Summarize(uow).today(user_id, TODAY)
+    assert summary.income == 0  # excluded — not in the report total
+    assert summary.count == 0
+
+    manage = ManageTransactions(uow)
+    recent = await manage.list_recent(user_id)
+    assert len(recent) == 1  # still visible in /list (audit completeness)
 
 
 async def test_get_or_create_user_twice_returns_same_user(uow: FakeUnitOfWork) -> None:

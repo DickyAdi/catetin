@@ -1,4 +1,7 @@
-from sqlalchemy import case, desc, func, insert, select
+from typing import Any, cast
+
+from sqlalchemy import case, desc, func, insert, select, update
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from catetin.domain.models import (
@@ -12,6 +15,7 @@ from catetin.domain.ports.clock import ClockPort
 
 from ...models import TransactionRow
 from .mappers import (
+    transaction_from_core_row,
     transaction_row_from_parsed,
     transaction_to_domain,
     transaction_values_from_parsed,
@@ -23,9 +27,13 @@ class SqlAlchemyTransactionRepository:
         self._session = session
         self._clock = clock
 
-    async def add(self, user_id: int, parsed: ParsedTransaction) -> Transaction:
+    async def add(
+        self, user_id: int, parsed: ParsedTransaction, *, excluded_from_report: bool = False
+    ) -> Transaction:
         occurred_at = int(self._clock.now().timestamp())
-        row = transaction_row_from_parsed(user_id, parsed, occurred_at)
+        row = transaction_row_from_parsed(
+            user_id, parsed, occurred_at, excluded_from_report=excluded_from_report
+        )
         self._session.add(row)
         await self._session.flush()
         return transaction_to_domain(row)
@@ -99,6 +107,7 @@ class SqlAlchemyTransactionRepository:
             TransactionRow.occurred_on >= start_date,
             TransactionRow.occurred_on <= end_date,
             TransactionRow.deleted_at.is_(None),
+            TransactionRow.excluded_from_report == 0,
         ).group_by(TransactionRow.kind)
         rows = (await self._session.execute(stmt)).all()
 
@@ -131,6 +140,7 @@ class SqlAlchemyTransactionRepository:
                 TransactionRow.occurred_on >= start_date,
                 TransactionRow.occurred_on <= end_date,
                 TransactionRow.deleted_at.is_(None),
+                TransactionRow.excluded_from_report == 0,
             )
             .group_by(TransactionRow.occurred_on)
             .order_by(TransactionRow.occurred_on)
@@ -152,6 +162,7 @@ class SqlAlchemyTransactionRepository:
                 TransactionRow.user_id == user_id,
                 TransactionRow.kind == kind,
                 TransactionRow.deleted_at.is_(None),
+                TransactionRow.excluded_from_report == 0,
             )
             .group_by(TransactionRow.item, TransactionRow.kind)
             .order_by(desc("total"))
@@ -159,6 +170,62 @@ class SqlAlchemyTransactionRepository:
         )
         rows = (await self._session.execute(stmt)).all()
         return [ItemTotal(item=item, kind=kind, total=total) for item, kind, total in rows]
+
+    async def list_flagged(
+        self, user_id: int, start_date: str, end_date: str
+    ) -> list[Transaction]:
+        stmt = (
+            select(TransactionRow)
+            .where(
+                TransactionRow.user_id == user_id,
+                TransactionRow.occurred_on >= start_date,
+                TransactionRow.occurred_on <= end_date,
+                TransactionRow.flagged == 1,
+                TransactionRow.excluded_from_report == 0,
+            )
+            .order_by(TransactionRow.occurred_at)
+        )
+        rows = (await self._session.execute(stmt)).scalars().all()
+        return [transaction_to_domain(row) for row in rows]
+
+    async def exclude_flagged(self, user_id: int, start_date: str, end_date: str) -> int:
+        stmt = (
+            update(TransactionRow)
+            .where(
+                TransactionRow.user_id == user_id,
+                TransactionRow.occurred_on >= start_date,
+                TransactionRow.occurred_on <= end_date,
+                TransactionRow.flagged == 1,
+                TransactionRow.excluded_from_report == 0,
+                TransactionRow.deleted_at.is_(None),
+            )
+            .values(excluded_from_report=1)
+        )
+        result = await self._session.execute(stmt)
+        await self._session.flush()
+
+        return cast("int", cast(CursorResult[Any], result).rowcount)
+
+    async def list_in_period(
+        self, user_id: int, start_date: str, end_date: str
+    ) -> list[Transaction]:
+        """Full audit-trail listing (FR-5 §B) — includes soft-deleted rows
+        (shown with their own "Batal" status), so this deliberately selects
+        the raw `Table` rather than the mapped entity to bypass the
+        session-wide soft-delete `with_loader_criteria`."""
+        table = TransactionRow.__table__
+        stmt = (
+            select(table)
+            .where(
+                table.c.user_id == user_id,
+                table.c.occurred_on >= start_date,
+                table.c.occurred_on <= end_date,
+                table.c.excluded_from_report == 0,
+            )
+            .order_by(table.c.occurred_at)
+        )
+        rows = (await self._session.execute(stmt)).all()
+        return [transaction_from_core_row(row) for row in rows]
 
     async def count_by_occurred_on(self, occurred_on: str) -> int:
         """Instance-wide (all users) count for ops stats — not user-scoped."""

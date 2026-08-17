@@ -171,6 +171,164 @@ async def test_webhook_lapor_command_sends_pdf_document(
     assert caption is not None and "Laporan" in caption
 
 
+def _callback_update(update_id: int, user_id: int, data: str) -> dict:
+    return {
+        "update_id": update_id,
+        "callback_query": {
+            "id": f"cbq{update_id}",
+            "from": {"id": user_id, "is_bot": False, "first_name": "Rina"},
+            "message": {
+                "message_id": update_id,
+                "date": int(time.time()),
+                "chat": {"id": user_id, "type": "private"},
+            },
+            "chat_instance": "1",
+            "data": data,
+        },
+    }
+
+
+async def test_webhook_lapor_with_flagged_shows_review_gate_then_sends_clean_pdf(
+    client: AsyncClient, app: FastAPI, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """FR-2 end-to-end: a flagged transaction holds `/lapor` behind a review
+    gate; pressing "Keluarkan dari laporan" excludes it and sends the PDF."""
+    sent: list[tuple[int, str, object]] = []
+    documents: list[tuple[int, str, bytes, str | None]] = []
+
+    async def fake_send_message(self: Bot, chat_id: int, text: str, **kwargs: object) -> None:
+        sent.append((chat_id, text, kwargs.get("reply_markup")))
+
+    async def fake_send_document(
+        self: Bot, chat_id: int, document: bytes, filename: str, caption: str | None = None,
+        **_: object,
+    ) -> None:
+        documents.append((chat_id, filename, bytes(document), caption))
+
+    async def fake_answer_callback_query(self: Bot, callback_query_id: str, **_: object) -> bool:
+        return True
+
+    monkeypatch.setattr(Bot, "send_message", fake_send_message)
+    monkeypatch.setattr(Bot, "send_document", fake_send_document)
+    monkeypatch.setattr(Bot, "answer_callback_query", fake_answer_callback_query)
+
+    state = app.state.catetin
+    user_id = 665544
+
+    response = await client.post(
+        "/webhook/telegram/test-secret",
+        json=_text_update(4001, user_id, "dapet duit 50k di jalan"),
+    )
+    assert response.status_code == 200
+    await state.telegram_update_queue.join()
+
+    response = await client.post(
+        "/webhook/telegram/test-secret", json=_text_update(4002, user_id, "/lapor")
+    )
+    assert response.status_code == 200
+    await state.telegram_update_queue.join()
+
+    assert not documents, "no PDF yet — the review gate should come first"
+    review_messages = [s for s in sent if "bukan usaha" in s[1].lower()]
+    assert review_messages, "expected the review-gate message"
+    _, review_text, keyboard = review_messages[-1]
+    assert "1 transaksi" in review_text
+    assert keyboard is not None
+    exclude_data = keyboard.inline_keyboard[0][0].callback_data
+    assert exclude_data.startswith("review_exclude:")
+
+    response = await client.post(
+        "/webhook/telegram/test-secret", json=_callback_update(4003, user_id, exclude_data)
+    )
+    assert response.status_code == 200
+    await state.telegram_update_queue.join()
+
+    assert documents, "the review decision should have sent a PDF"
+    assert documents[0][1].endswith(".pdf")
+    assert documents[0][2][:5] == b"%PDF-"
+
+
+async def test_webhook_lapor_without_flagged_sends_pdf_directly(
+    client: AsyncClient, app: FastAPI, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sent: list[tuple[int, str]] = []
+    documents: list[tuple[int, str, bytes, str | None]] = []
+
+    async def fake_send_message(self: Bot, chat_id: int, text: str, **_: object) -> None:
+        sent.append((chat_id, text))
+
+    async def fake_send_document(
+        self: Bot, chat_id: int, document: bytes, filename: str, caption: str | None = None,
+        **_: object,
+    ) -> None:
+        documents.append((chat_id, filename, bytes(document), caption))
+
+    monkeypatch.setattr(Bot, "send_message", fake_send_message)
+    monkeypatch.setattr(Bot, "send_document", fake_send_document)
+
+    user_id = 665545
+    response = await client.post(
+        "/webhook/telegram/test-secret", json=_text_update(4101, user_id, "jual ayam 50rb")
+    )
+    assert response.status_code == 200
+    state = app.state.catetin
+    await state.telegram_update_queue.join()
+
+    response = await client.post(
+        "/webhook/telegram/test-secret", json=_text_update(4102, user_id, "/lapor")
+    )
+    assert response.status_code == 200
+    await state.telegram_update_queue.join()
+
+    assert documents, "no flagged items — the PDF should be sent directly"
+
+
+async def test_webhook_ambiguous_message_offers_bukan_usaha_and_excludes(
+    client: AsyncClient, app: FastAPI, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """FR-3 end-to-end: the ambiguous keyboard offers a 3rd "Bukan Usaha"
+    button; picking it records the transaction excluded from reports."""
+    sent: list[tuple[int, str, object]] = []
+
+    async def fake_send_message(self: Bot, chat_id: int, text: str, **kwargs: object) -> None:
+        sent.append((chat_id, text, kwargs.get("reply_markup")))
+
+    async def fake_answer_callback_query(self: Bot, callback_query_id: str, **_: object) -> bool:
+        return True
+
+    monkeypatch.setattr(Bot, "send_message", fake_send_message)
+    monkeypatch.setattr(Bot, "answer_callback_query", fake_answer_callback_query)
+
+    state = app.state.catetin
+    user_id = 665546
+
+    response = await client.post(
+        "/webhook/telegram/test-secret", json=_text_update(4201, user_id, "gajian 2jt")
+    )
+    assert response.status_code == 200
+    await state.telegram_update_queue.join()
+
+    _, _, keyboard = sent[-1]
+    assert keyboard is not None
+    labels = [btn.text for row in keyboard.inline_keyboard for btn in row]
+    assert labels == ["Jual", "Beli", "Bukan Usaha"]
+    other_data = next(
+        btn.callback_data
+        for row in keyboard.inline_keyboard
+        for btn in row
+        if btn.text == "Bukan Usaha"
+    )
+
+    response = await client.post(
+        "/webhook/telegram/test-secret", json=_callback_update(4202, user_id, other_data)
+    )
+    assert response.status_code == 200
+    await state.telegram_update_queue.join()
+
+    confirmation = [s for s in sent if "gak dimasukkan ke laporan usaha" in s[1]]
+    assert confirmation, "expected the 'Bukan Usaha' confirmation reply"
+
+
 async def test_health_returns_ok(client: AsyncClient) -> None:
     response = await client.get("/health")
     assert response.status_code == 200

@@ -39,6 +39,12 @@ class TransactionRow(Base):
         Integer, nullable=False, server_default=text("(unixepoch())")
     )
     deleted_at: Mapped[int | None] = mapped_column(Integer)
+    # 1 = high-signal non-business pattern detected (heuristic, not a classification)
+    flagged: Mapped[int] = mapped_column(Integer, nullable=False, server_default=text("0"))
+    # 1 = user excluded this from reports (review gate / "Bukan Usaha") — stays in DB
+    excluded_from_report: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0")
+    )
 
     __table_args__ = (
         CheckConstraint("kind IN ('sale','expense')", name="kind_known"),
@@ -46,6 +52,8 @@ class TransactionRow(Base):
         CheckConstraint("unit_amount IS NULL OR unit_amount >= 0", name="unit_amount_nonneg"),
         CheckConstraint("total_amount > 0", name="total_amount_positive"),
         CheckConstraint("source IN ('regex','llm','manual')", name="source_known"),
+        CheckConstraint("flagged IN (0,1)", name="flagged_bool"),
+        CheckConstraint("excluded_from_report IN (0,1)", name="excluded_from_report_bool"),
         # Hot path: every summary is "one user, one date range, not deleted".
         Index(
             "idx_tx_user_date",

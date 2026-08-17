@@ -70,10 +70,16 @@ class RecordTransactions:
             recorded=recorded, issues=issues, ambiguous=ambiguous, today_total=today_total
         )
 
-    async def confirm(self, user_id: int, parsed: ParsedTransaction) -> Transaction:
+    async def confirm(
+        self, user_id: int, parsed: ParsedTransaction, *, excluded_from_report: bool = False
+    ) -> Transaction:
         """Persist a single segment whose kind was ambiguous, now that the user
-        has picked sale/expense via `MessagingPort.ask_choice` (US-08)."""
+        has picked sale/expense via `MessagingPort.ask_choice` (US-08). Also used
+        for "Bukan Usaha" (FR-3): `excluded_from_report=True` records the
+        transaction (audit completeness) but keeps it out of reports."""
         async with self._uow as uow:
-            tx = await uow.transactions.add(user_id, parsed)
+            tx = await uow.transactions.add(
+                user_id, parsed, excluded_from_report=excluded_from_report
+            )
             await uow.commit()
             return tx

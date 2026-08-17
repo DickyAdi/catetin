@@ -1,6 +1,6 @@
 from typing import Protocol
 
-from ..models import DayTotal, ItemTotal, Summary
+from ..models import DayTotal, ItemTotal, Summary, Transaction
 
 
 class ReportRendererPort(Protocol):
@@ -11,7 +11,9 @@ class ReportRendererPort(Protocol):
         user_id: int,
         summary: Summary,
         day_totals: list[DayTotal],
-        item_totals: list[ItemTotal],
+        sale_item_totals: list[ItemTotal],
+        expense_item_totals: list[ItemTotal],
+        transactions: list[Transaction],
         business_name: str | None,
         period_label: str,
     ) -> bytes: ...

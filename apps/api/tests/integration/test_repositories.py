@@ -23,6 +23,7 @@ def _parsed(
     total_amount: int = 15_000,
     kind: str = "sale",
     occurred_on: date = date(2026, 8, 15),
+    flagged: bool = False,
 ) -> ParsedTransaction:
     return ParsedTransaction(
         kind=kind,
@@ -33,6 +34,7 @@ def _parsed(
         occurred_on=occurred_on,
         confidence=1.0,
         raw_text=f"{item} {total_amount}",
+        flagged=flagged,
     )
 
 
@@ -245,6 +247,153 @@ async def test_rate_limiter_allows_until_limit_then_blocks(
     ]
 
     assert results == [True, True, True, False]
+
+
+async def test_summarize_range_excludes_excluded_from_report(
+    uow: SqlAlchemyUnitOfWork,
+) -> None:
+    async with uow as u:
+        user = await u.users.create("telegram", "7001")
+        await u.transactions.add(user.id, _parsed(kind="sale", total_amount=50_000))
+        await u.transactions.add(
+            user.id,
+            _parsed(item="dapet duit", kind="sale", total_amount=10_000, flagged=True),
+            excluded_from_report=True,
+        )
+        await u.commit()
+
+    async with uow as u:
+        summary = await u.transactions.summarize_range(user.id, "2026-08-01", "2026-08-31")
+        daily = await u.transactions.daily_totals(user.id, "2026-08-01", "2026-08-31")
+        top = await u.transactions.top_items(user.id, "sale")
+
+    assert summary.income == 50_000
+    assert summary.count == 1
+    assert sum(d.income for d in daily) == 50_000
+    assert {t.item for t in top} == {"kopi"}
+
+
+async def test_list_recent_includes_excluded_transactions(
+    uow: SqlAlchemyUnitOfWork,
+) -> None:
+    async with uow as u:
+        user = await u.users.create("telegram", "7002")
+        await u.transactions.add(user.id, _parsed(item="usaha"))
+        await u.transactions.add(
+            user.id, _parsed(item="pribadi"), excluded_from_report=True
+        )
+        await u.commit()
+
+    async with uow as u:
+        recent = await u.transactions.list_recent(user.id)
+
+    assert {t.item for t in recent} == {"usaha", "pribadi"}
+    excluded = {t.item: t.excluded_from_report for t in recent}
+    assert excluded["pribadi"] is True
+    assert excluded["usaha"] is False
+
+
+async def test_cancel_last_works_on_excluded_transaction(
+    uow: SqlAlchemyUnitOfWork,
+) -> None:
+    async with uow as u:
+        user = await u.users.create("telegram", "7003")
+        await u.transactions.add(
+            user.id, _parsed(item="pribadi"), excluded_from_report=True
+        )
+        await u.commit()
+
+    async with uow as u:
+        removed = await u.transactions.soft_delete_last(user.id)
+        await u.commit()
+
+    assert removed is not None
+    assert removed.item == "pribadi"
+
+
+async def test_list_flagged_returns_only_flagged_not_excluded_not_deleted(
+    uow: SqlAlchemyUnitOfWork,
+) -> None:
+    async with uow as u:
+        user = await u.users.create("telegram", "7004")
+        await u.transactions.add(user.id, _parsed(item="biasa", flagged=False))
+        await u.transactions.add(user.id, _parsed(item="di-flag", flagged=True))
+        await u.transactions.add(
+            user.id,
+            _parsed(item="sudah-excluded", flagged=True),
+            excluded_from_report=True,
+        )
+        deleted_tx = await u.transactions.add(user.id, _parsed(item="terhapus", flagged=True))
+        await u.commit()
+
+    async with uow as u:
+        await u.transactions.soft_delete_last(user.id)  # soft-deletes "terhapus" (EC-6)
+        await u.commit()
+    assert deleted_tx.item == "terhapus"
+
+    async with uow as u:
+        flagged = await u.transactions.list_flagged(user.id, "2026-08-01", "2026-08-31")
+
+    assert [t.item for t in flagged] == ["di-flag"]
+
+
+async def test_exclude_flagged_bulk_updates_and_summary_reflects_it(
+    uow: SqlAlchemyUnitOfWork,
+) -> None:
+    async with uow as u:
+        user = await u.users.create("telegram", "7005")
+        await u.transactions.add(user.id, _parsed(item="usaha", total_amount=50_000))
+        await u.transactions.add(
+            user.id, _parsed(item="flag-1", total_amount=10_000, flagged=True)
+        )
+        await u.transactions.add(
+            user.id, _parsed(item="flag-2", total_amount=20_000, flagged=True)
+        )
+        await u.commit()
+
+    async with uow as u:
+        count = await u.transactions.exclude_flagged(user.id, "2026-08-01", "2026-08-31")
+        await u.commit()
+
+    assert count == 2
+
+    async with uow as u:
+        summary = await u.transactions.summarize_range(user.id, "2026-08-01", "2026-08-31")
+        flagged_after = await u.transactions.list_flagged(user.id, "2026-08-01", "2026-08-31")
+        recent = await u.transactions.list_recent(user.id)
+
+    assert summary.income == 50_000  # both flagged sales excluded
+    assert flagged_after == []  # nothing left flagged-and-not-excluded
+    assert len(recent) == 3  # all 3 still visible in /list
+
+
+async def test_list_in_period_includes_soft_deleted_with_status(
+    uow: SqlAlchemyUnitOfWork,
+) -> None:
+    async with uow as u:
+        user = await u.users.create("telegram", "7006")
+        await u.transactions.add(user.id, _parsed(item="aktif"))
+        await u.transactions.add(
+            user.id, _parsed(item="pribadi"), excluded_from_report=True
+        )
+        await u.transactions.add(user.id, _parsed(item="dibatalkan"))
+        await u.commit()
+
+    async with uow as u:
+        await u.transactions.soft_delete_last(user.id)  # soft-deletes "dibatalkan" (most recent)
+        await u.commit()
+
+    async with uow as u:
+        rows = await u.transactions.list_in_period(user.id, "2026-08-01", "2026-08-31")
+
+    # excluded_from_report=1 rows never appear, regardless of deleted_at
+    items = {r.item for r in rows}
+    assert "pribadi" not in items
+    # soft-deleted-but-reportable rows still appear, tagged via deleted_at
+    by_item = {r.item: r for r in rows}
+    assert set(by_item) == {"aktif", "dibatalkan"}
+    assert by_item["dibatalkan"].deleted_at is not None
+    assert by_item["aktif"].deleted_at is None
 
 
 async def test_rate_limiter_buckets_are_independent(
