@@ -241,3 +241,6 @@ apps/web/.vite/
 
 # Claude Design reference exports — local design docs, never committed
 apps/web/references/design/
+
+# Dev-server pidfiles & logs (make dev-all / dev-down)
+.dev/
