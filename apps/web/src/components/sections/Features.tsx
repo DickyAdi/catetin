@@ -1,4 +1,4 @@
-import { Lock, MessageCircle, TrendingUp } from "lucide-react";
+import { FileText, Lock, MessageCircle, TrendingUp } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
 const FEATURES: { title: string; body: string; icon: LucideIcon }[] = [
@@ -16,6 +16,11 @@ const FEATURES: { title: string; body: string; icon: LucideIcon }[] = [
     title: "Data Cuma Punya Kamu",
     body: "Aman dan privat, sesuai aturan UU PDP.",
     icon: Lock,
+  },
+  {
+    title: "Laporan Siap Dipakai",
+    body: "Laporan untung-rugi rapi, siap buat kebutuhan usahamu.",
+    icon: FileText,
   },
 ];
 

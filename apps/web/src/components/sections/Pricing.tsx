@@ -1,3 +1,4 @@
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { CTA_LABEL, TELEGRAM_URL } from "@/lib/constants";
 
@@ -27,6 +28,10 @@ export function Pricing() {
             <li>Semua fitur Gratis</li>
             <li>Laporan PDF bulanan (/lapor)</li>
             <li>Riwayat tanpa batas waktu</li>
+            <li className="flex items-center gap-xs">
+              Laporan keuangan lengkap (neraca)
+              <Badge variant="placeholder">Segera</Badge>
+            </li>
           </ul>
           <Button asChild variant="primary" className="w-full">
             <a href={TELEGRAM_URL} target="_blank" rel="noreferrer">

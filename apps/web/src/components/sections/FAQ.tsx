@@ -31,6 +31,11 @@ const FAQS = [
     question: "Bisa pakai WhatsApp?",
     answer: "Belum bisa. Sekarang CatetIn baru ada di Telegram.",
   },
+  {
+    question: "Bisa buat ngajuin modal ke bank?",
+    answer:
+      "Bisa. Laporan CatetIn disusun rapi dan jelas, siap dilampirkan ke koperasi atau bank (misalnya KUR). Laporan keuangan lengkap sedang dikembangkan dan bakal hadir untuk pengguna premium.",
+  },
 ];
 
 export function FAQ() {
