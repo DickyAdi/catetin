@@ -1,5 +1,7 @@
 APP_DIR := apps/api
 WEB_DIR := apps/web
+API_PORT := 8000
+FE_PORT := 5173
 
 .DEFAULT_GOAL := help
 
@@ -38,7 +40,7 @@ dev-all: ## Start backend + frontend dev servers in background (tracked via .dev
 	@echo "    api pid: $$(cat .dev/api.pid)  fe pid: $$(cat .dev/fe.pid)"
 	@echo "    logs: .dev/api.log .dev/fe.log   (stop: make dev-down)"
 
-dev-down: ## Stop ONLY the dev servers tracked in .dev/*.pid (never touches other processes)
+dev-down: ## Stop dev servers tracked in .dev/*.pid, plus any stray process left on their ports (individual `kill`s only — never a process-group kill)
 	@for name in api fe; do \
 		pidfile=".dev/$$name.pid"; \
 		if [ -f "$$pidfile" ]; then \
@@ -52,6 +54,13 @@ dev-down: ## Stop ONLY the dev servers tracked in .dev/*.pid (never touches othe
 		else \
 			echo "    no $$name pidfile — nothing to stop"; \
 		fi; \
+	done
+	@sleep 1
+	@for portspec in "api:$(API_PORT)" "fe:$(FE_PORT)"; do \
+		name=$${portspec%%:*}; port=$${portspec##*:}; \
+		for pid in $$(lsof -ti tcp:$$port -sTCP:LISTEN 2>/dev/null); do \
+			kill $$pid 2>/dev/null && echo "    killed stray $$name process still on port $$port (pid $$pid)"; \
+		done; \
 	done
 	@sleep 1
 	@echo "dev stacks down"
