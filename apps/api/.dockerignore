@@ -1,0 +1,31 @@
+# Ignore file for apps/api/Dockerfile. Build context is the repo root (see
+# compose.yaml: build.context: .), so this must be named after the Dockerfile
+# path relative to that context (BuildKit convention) rather than plain
+# .dockerignore — Docker Compose/BuildKit picks it up automatically.
+
+.git/
+.github/
+README.md
+CLAUDE.md
+
+# Web app isn't needed to build the API image
+apps/web/
+
+# Python cruft
+**/__pycache__/
+**/*.py[codz]
+**/*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+**/.coverage
+htmlcov/
+
+# Local env / secrets / runtime data — never baked into the image
+apps/api/.env
+.venv/
+backups/
+.dev/
+
+# Tests aren't needed in the runtime image
+apps/api/tests/

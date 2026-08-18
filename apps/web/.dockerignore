@@ -1,0 +1,14 @@
+# No Dockerfile exists for apps/web yet (marketing site is prerendered in CI
+# and hosted externally — node/npm must never run on the VPS, per CLAUDE.md).
+# This is here so a future apps/web/Dockerfile (build context = apps/web/)
+# gets sane ignores without anyone having to remember to add them.
+
+node_modules/
+dist/
+dist-ssr/
+.vite/
+.git/
+.env
+.env.local
+.env.*.local
+*.md
