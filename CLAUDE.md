@@ -122,9 +122,20 @@ When asked to implement a module: **fetch the relevant Outline docs first** and 
 - P7 ✅ Report renderers (M4): text + fpdf2 PDF (`/lapor`) — `aa93dad` — **MVP feature-complete**
 - Monorepo restructure (`apps/api`, `apps/web`, `packages/`, `scripts/`, Makefile, Docker) — done, this doc's layout is current
 
-## Frontend (Phase: not started)
+## Frontend (implemented — see git log for current state)
 
-Marketing-only static site (no product dashboard), lives in `apps/web/` (currently just a `.gitkeep`). React Router (library mode, NOT framework mode) + shadcn + Vite, prerendered via vite-react-ssg for SEO. Build in CI only — **node/npm must never be installed on the VPS**. Hosted externally (e.g. Cloudflare Pages). Details: "Frontend Marketing" doc in Outline.
+Marketing-only static site (no product dashboard), lives in `apps/web/`. React Router (library mode, NOT framework mode) + shadcn + Vite + **Tailwind CSS v4**, prerendered via vite-react-ssg for SEO. Build in CI only — **node/npm must never be installed on the VPS**. Hosted externally (e.g. Cloudflare Pages). Details: "Frontend Marketing" + "Frontend Marketing Design Spec" docs in Outline.
+
+**Tailwind v4 rules (migrated from v3 — do NOT regress):**
+- `tailwind.config.ts` is **GONE**. Theme tokens (colors, spacing, type scale, radii, keyframes) live in a CSS `@theme` block in `apps/web/src/styles/globals.css`.
+- `postcss.config.js` uses `@tailwindcss/postcss` — **autoprefixer is no longer needed** (v4 handles it internally); do not add it back.
+- Utility renames: `outline-none` → `outline-hidden`; arbitrary `min-h-[48px]` → `min-h-xxl` theme token.
+- `components.json` config path was fixed by the upgrade — keep it pointing at the real layout.
+
+**Shadcn lib files are load-bearing — never delete/rename:**
+- `apps/web/src/lib/utils.ts` — the `cn()` helper (uses `tailwind-merge` with `extendTailwindMerge` config for the project's custom font-size tokens `text-button-large`, `text-nav-link`, etc. — without it tailwind-merge misreads them as text-color utilities and drops real color classes like `text-white`).
+- `apps/web/src/lib/constants.ts` — shared constants.
+- `ui/` components and sections import both; removing either breaks typecheck.
 
 ## Testing conventions
 
@@ -144,3 +155,5 @@ All paths below are relative to `apps/api/`.
 - Telegram webhook path secret: `/webhook/telegram/{secret}` — webhook_auth middleware validates it; webhook route never returns 5xx (durable inbox acceptance is the priority).
 - MCP `--allowedTools` must include `mcp__outline__*` or Claude can't read the design docs in print mode.
 - Long phases hit `--max-turns` — split into "implement" + "tests/verify" runs when a phase is big.
+- **`.gitignore` is split per-app** (`apps/api/.gitignore`, `apps/web/.gitignore` + root). Put new ignore rules in the app's own `.gitignore`, not the root one.
+- **`make dev-down` tracks PID files in `.dev/*.pid`, but `uvicorn --reload` forks a separate reloader/worker that doesn't share that PID** — dev-down additionally kills whatever is still bound to the api/fe ports via individual `kill`s per pid (never a process-group signal). If you touch the Makefile dev targets, keep this behavior — it exists because a process-group kill once took down the host's Hermes messaging gateway.
