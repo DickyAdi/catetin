@@ -57,7 +57,7 @@ function TabsTrigger({
       aria-selected={active === value}
       onClick={() => setValue(value)}
       className={cn(
-        "inline-flex min-h-[48px] items-center justify-center rounded-secondary px-lg py-sm text-button-utility text-ink-muted transition-colors",
+        "inline-flex min-h-xxl items-center justify-center rounded-secondary px-lg py-sm text-button-utility text-ink-muted transition-colors",
         active === value && "bg-surface-white text-ink shadow-evidence",
         className,
       )}

@@ -25,7 +25,7 @@ const AccordionTrigger = React.forwardRef<
   <summary
     ref={ref as React.Ref<HTMLElement>}
     className={cn(
-      "flex min-h-[48px] cursor-pointer list-none items-center justify-between gap-md py-lg text-body-strong text-ink [&::-webkit-details-marker]:hidden",
+      "flex min-h-xxl cursor-pointer list-none items-center justify-between gap-md py-lg text-body-strong text-ink [&::-webkit-details-marker]:hidden",
       className,
     )}
     {...props}

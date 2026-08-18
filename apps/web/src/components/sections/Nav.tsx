@@ -48,7 +48,7 @@ export function Nav() {
               <SheetClose key={link.href}>
                 <a
                   href={link.href}
-                  className="flex min-h-[48px] items-center text-nav-link text-ink no-underline"
+                  className="flex min-h-xxl items-center text-nav-link text-ink no-underline"
                 >
                   {link.label}
                 </a>
