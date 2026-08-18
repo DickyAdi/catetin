@@ -80,7 +80,7 @@ def create_engines(settings: Settings) -> Engines:
     )
 
 
-def wire(settings: Settings, engines: Engines) -> Dependencies:
+def wire(settings: Settings, engines: Engines, polling: bool = False) -> Dependencies:
     """Lifespan step 3: wire ports -> adapters, once the schema is verified."""
     clock = SystemClock()
     parser = RegexParser()
@@ -120,7 +120,7 @@ def wire(settings: Settings, engines: Engines) -> Dependencies:
     # The inbound Application and the outbound sender share one PTB Bot
     # instance (`application.bot`) — no second token, no second connection
     # pool. Handlers read their dependencies from `bot_data["deps"]`.
-    application = telegram_app.build_application(settings)
+    application = telegram_app.build_application(settings, polling=polling)
     messaging = cast(MessagingPort, TelegramSender(application.bot, reader_uow_factory))
     application.bot_data["deps"] = telegram_handlers.TelegramDeps(
         onboarding=onboarding,

@@ -1,7 +1,14 @@
-"""Builds the PTB `Application` in webhook mode — `updater=None`, we feed
+"""Builds the PTB `Application` in one of two modes.
+
+Production (default, `polling=False`): webhook mode — `updater=None`, we feed
 updates ourselves via `feed_update`. Not `run_polling`, not PTB's built-in
 webserver: FastAPI owns the HTTP server, this only owns update dispatch.
 Started/stopped from the HTTP lifespan (M6 steps 4 and shutdown).
+
+Local dev (`polling=True`): PTB keeps its default `Updater` so
+`scripts/dev_polling.py` can call `run_polling()` and fetch updates directly
+from Telegram — no webhook, no public URL, no FastAPI. Handlers are
+identical in both modes.
 """
 
 from __future__ import annotations
@@ -19,13 +26,11 @@ from telegram.ext import (
 from . import handlers
 
 
-def build_application(settings: Settings) -> Application:
-    application = (
-        Application.builder()
-        .token(settings.telegram_bot_token.get_secret_value())
-        .updater(None)  # no Updater: we feed updates ourselves
-        .build()
-    )
+def build_application(settings: Settings, polling: bool = False) -> Application:
+    builder = Application.builder().token(settings.telegram_bot_token.get_secret_value())
+    if not polling:
+        builder = builder.updater(None)  # no Updater: we feed updates ourselves
+    application = builder.build()
     application.add_handler(CommandHandler("start", handlers.on_start))
     application.add_handler(CommandHandler("hariini", handlers.on_today))
     application.add_handler(CommandHandler("minggu", handlers.on_week))

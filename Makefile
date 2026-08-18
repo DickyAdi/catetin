@@ -5,7 +5,7 @@ FE_PORT := 5173
 
 .DEFAULT_GOAL := help
 
-.PHONY: help setup dev dev-api dev-fe dev-all dev-down test lint typecheck migrate migrate-new \
+.PHONY: help setup dev dev-api dev-fe dev-all dev-down dev-bot test lint typecheck migrate migrate-new \
 	dockerized docker-up docker-down clean status deploy
 
 help: ## Show this help
@@ -30,6 +30,9 @@ dev-api: ## Run the backend dev server with reload (needs apps/api/.env — see 
 
 dev-fe: ## Run the frontend (Vite) dev server (apps/web)
 	cd $(WEB_DIR) && npm run dev
+
+dev-bot: ## Run the Telegram bot in polling mode for local testing (no webhook/tunnel needed)
+	cd $(APP_DIR) && uv run python scripts/dev_polling.py
 
 dev-all: ## Start backend + frontend dev servers in background (tracked via .dev/*.pid; stop with `make dev-down`)
 	@mkdir -p .dev
