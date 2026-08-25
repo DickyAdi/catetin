@@ -26,19 +26,22 @@ const FEATURES: { title: string; body: string; icon: LucideIcon }[] = [
 
 export function Features() {
   return (
-    <section id="fitur" className="mx-auto max-w-content px-lg pb-section">
-      <h2 className="mb-xxl text-center text-display-md">Kenapa CatetIn</h2>
+    <section id="fitur" className="mx-auto max-w-content px-lg pb-section dark:bg-surface-dark">
+      <h2 className="mb-xxl text-center text-display-md dark:text-on-dark">Kenapa CatetIn</h2>
       <div className="flex flex-wrap justify-center gap-lg">
         {FEATURES.map((feature) => (
           <div
             key={feature.title}
-            className="min-w-[260px] max-w-[320px] flex-1 rounded-card border border-hairline bg-surface-white p-lg"
+            className="min-w-[260px] max-w-[320px] flex-1 rounded-card border border-hairline bg-surface-white p-lg dark:border-surface-dark-soft dark:bg-surface-dark-soft"
           >
-            <div className="mb-md flex h-11 w-11 items-center justify-center rounded-secondary bg-primary-soft">
-              <feature.icon className="h-[22px] w-[22px] text-primary" strokeWidth={2} />
+            <div className="mb-md flex h-11 w-11 items-center justify-center rounded-secondary bg-primary-soft dark:bg-surface-dark">
+              <feature.icon
+                className="h-[22px] w-[22px] text-primary dark:text-primary-on-dark"
+                strokeWidth={2}
+              />
             </div>
-            <h3 className="mb-xs text-body-strong">{feature.title}</h3>
-            <p className="text-body-small text-ink-muted">{feature.body}</p>
+            <h3 className="mb-xs text-body-strong dark:text-on-dark">{feature.title}</h3>
+            <p className="text-body-small text-ink-muted dark:text-on-dark-muted">{feature.body}</p>
           </div>
         ))}
       </div>

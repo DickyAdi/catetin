@@ -40,8 +40,8 @@ const FAQS = [
 
 export function FAQ() {
   return (
-    <section id="faq" className="mx-auto max-w-[720px] px-lg pb-section">
-      <h2 className="mb-xl text-center text-display-md">Pertanyaan Umum</h2>
+    <section id="faq" className="mx-auto max-w-[720px] px-lg pb-section dark:bg-surface-dark">
+      <h2 className="mb-xl text-center text-display-md dark:text-on-dark">Pertanyaan Umum</h2>
       <Accordion>
         {FAQS.map((faq) => (
           <AccordionItem key={faq.question}>

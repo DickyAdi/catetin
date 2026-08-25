@@ -32,18 +32,21 @@ export function KebijakanPrivasi() {
   return (
     <div>
       <Nav />
-      <section className="mx-auto max-w-content px-lg pb-section pt-xl">
-        <h1 className="mb-md text-center text-display-md">Kebijakan Privasi</h1>
-        <p className="mx-auto mb-xxl max-w-[560px] text-center text-body text-ink-muted">
+      <section className="mx-auto max-w-content px-lg pb-section pt-xl dark:bg-surface-dark">
+        <h1 className="mb-md text-center text-display-md dark:text-on-dark">Kebijakan Privasi</h1>
+        <p className="mx-auto mb-xxl max-w-[560px] text-center text-body text-ink-muted dark:text-on-dark-muted">
           Ringkasan sederhana soal data kamu di CatetIn, sesuai UU Pelindungan Data
           Pribadi (UU PDP).
         </p>
 
         <div className="mx-auto flex max-w-[720px] flex-col gap-lg">
           {SECTIONS.map((section) => (
-            <div key={section.title} className="rounded-card border border-hairline bg-surface-white p-lg">
-              <h2 className="mb-xs text-body-strong">{section.title}</h2>
-              <p className="text-body text-ink-muted">{section.body}</p>
+            <div
+              key={section.title}
+              className="rounded-card border border-hairline bg-surface-white p-lg dark:border-surface-dark-soft dark:bg-surface-dark-soft"
+            >
+              <h2 className="mb-xs text-body-strong dark:text-on-dark">{section.title}</h2>
+              <p className="text-body text-ink-muted dark:text-on-dark-muted">{section.body}</p>
             </div>
           ))}
         </div>

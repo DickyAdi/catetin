@@ -88,14 +88,14 @@ function SheetContent({
         role="dialog"
         aria-modal="true"
         className={cn(
-          "absolute inset-y-0 right-0 flex h-full w-4/5 max-w-sm flex-col gap-lg border-l border-hairline bg-surface-white p-lg shadow-evidence",
+          "absolute inset-y-0 right-0 flex h-full w-4/5 max-w-sm flex-col gap-lg border-l border-hairline bg-surface-white p-lg shadow-evidence dark:border-surface-dark-soft dark:bg-surface-dark-soft",
           className,
         )}
       >
         {children}
         <button
           onClick={() => setOpen(false)}
-          className="absolute right-lg top-lg flex h-12 w-12 items-center justify-center rounded-secondary text-ink-muted hover:bg-divider-soft"
+          className="absolute right-lg top-lg flex h-12 w-12 items-center justify-center rounded-secondary text-ink-muted hover:bg-divider-soft dark:text-on-dark-muted dark:hover:bg-surface-dark"
         >
           <X className="h-6 w-6" />
           <span className="sr-only">Tutup</span>
@@ -107,7 +107,9 @@ function SheetContent({
 }
 
 function SheetTitle({ className, ...props }: React.HTMLAttributes<HTMLHeadingElement>) {
-  return <h2 className={cn("text-body-strong text-ink", className)} {...props} />;
+  return (
+    <h2 className={cn("text-body-strong text-ink dark:text-on-dark", className)} {...props} />
+  );
 }
 
 export { Sheet, SheetTrigger, SheetClose, SheetContent, SheetTitle };

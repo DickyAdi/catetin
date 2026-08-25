@@ -7,11 +7,11 @@ import { BotBubble, Money, PhoneFrame, UserBubble } from "./ChatBubble";
 // and push the headline (the real hero) below the fold on mobile.
 export function Hero() {
   return (
-    <section className="mx-auto max-w-content px-lg pb-section pt-xl text-center">
-      <h1 className="mx-auto mb-lg text-hero-display-mobile desktop:text-hero-display">
+    <section className="mx-auto max-w-content px-lg pb-section pt-xl text-center dark:bg-surface-dark">
+      <h1 className="mx-auto mb-lg text-hero-display-mobile desktop:text-hero-display dark:text-on-dark">
         Catat Untung-Rugi Warungmu, Langsung dari Chat
       </h1>
-      <p className="mx-auto mb-xl max-w-[560px] text-lead text-ink-muted">
+      <p className="mx-auto mb-xl max-w-[560px] text-lead text-ink-muted dark:text-on-dark-muted">
         Tanpa Excel, tanpa aplikasi baru. Ketik jualanmu seperti chat biasa di Telegram.
       </p>
       <Button asChild variant="primary" className="mb-xxl w-full desktop:w-auto">

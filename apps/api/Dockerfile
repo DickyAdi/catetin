@@ -19,6 +19,10 @@ COPY pyproject.toml uv.lock ./
 COPY apps/api/pyproject.toml apps/api/pyproject.toml
 RUN uv sync --frozen --no-dev --no-install-project --project apps/api
 
+# Shared brand assets (logos, fonts). `catetin.assets` resolves these relative
+# to the workspace root, so they must exist in the image at the same path.
+COPY packages packages
+
 COPY apps/api apps/api
 RUN uv sync --frozen --no-dev --project apps/api
 

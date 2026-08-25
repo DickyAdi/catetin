@@ -141,7 +141,7 @@
 
 @layer base {
   * {
-    @apply border-hairline;
+    @apply border-hairline dark:border-surface-dark-soft;
   }
 
   html {
@@ -150,18 +150,25 @@
 
   body {
     @apply bg-canvas text-ink font-sans text-body antialiased;
+    @apply dark:bg-surface-dark dark:text-on-dark;
   }
 
   a {
-    @apply text-primary;
+    @apply text-primary dark:text-primary-on-dark;
   }
 
   a:hover {
-    @apply text-primary-hover;
+    @apply text-primary-hover dark:text-primary-on-dark;
   }
 
   :focus-visible {
     outline: 2px solid #167d6b;
     outline-offset: 3px;
+  }
+
+  /* #167d6b has too little contrast against --color-surface-dark to read as a
+     focus ring, so the dark theme uses the lighter brand tint. */
+  .dark :focus-visible {
+    outline-color: #3fbaa4;
   }
 }

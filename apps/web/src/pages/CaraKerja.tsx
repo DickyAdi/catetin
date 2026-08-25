@@ -58,23 +58,23 @@ export function CaraKerja() {
   return (
     <div>
       <Nav />
-      <section className="mx-auto max-w-content px-lg pb-section pt-xl text-center">
-        <h1 className="mb-md text-display-md">Cara Kerja CatetIn</h1>
-        <p className="mx-auto max-w-[560px] text-body text-ink-muted">
+      <section className="mx-auto max-w-content px-lg pb-section pt-xl text-center dark:bg-surface-dark">
+        <h1 className="mb-md text-display-md dark:text-on-dark">Cara Kerja CatetIn</h1>
+        <p className="mx-auto max-w-[560px] text-body text-ink-muted dark:text-on-dark-muted">
           Lima langkah gampang, dari buka Telegram sampai tahu untung-rugimu.
         </p>
       </section>
 
-      <section className="mx-auto max-w-content px-lg pb-section">
+      <section className="mx-auto max-w-content px-lg pb-section dark:bg-surface-dark">
         <div className="flex flex-col gap-xl">
           {STEPS.map((step) => (
             <div
               key={step.title}
-              className="flex flex-col items-center gap-lg rounded-card border border-hairline bg-surface-white p-xl desktop:flex-row desktop:items-start desktop:text-left"
+              className="flex flex-col items-center gap-lg rounded-card border border-hairline bg-surface-white p-xl desktop:flex-row desktop:items-start desktop:text-left dark:border-surface-dark-soft dark:bg-surface-dark-soft"
             >
               <div className="flex-1 text-center desktop:text-left">
-                <h2 className="mb-xs text-body-strong">{step.title}</h2>
-                <p className="text-body text-ink-muted">{step.body}</p>
+                <h2 className="mb-xs text-body-strong dark:text-on-dark">{step.title}</h2>
+                <p className="text-body text-ink-muted dark:text-on-dark-muted">{step.body}</p>
               </div>
               <PhoneFrame className="max-w-[300px] flex-1">{step.example}</PhoneFrame>
             </div>

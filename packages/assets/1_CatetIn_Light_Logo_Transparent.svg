@@ -1,0 +1,25 @@
+<svg width="450" height="120" viewBox="0 0 450 120" xmlns="http://www.w3.org/2000/svg">
+<defs>
+    <style>
+        @font-face {
+            font-family: 'Plus Jakarta Sans';
+            font-style: normal;
+            font-weight: 800;
+            src: url('fonts/PlusJakartaSans-ExtraBold.woff2') format('woff2');
+        }
+        .text {
+            font-family: 'Plus Jakarta Sans', sans-serif;
+            font-weight: 800;
+            font-size: 64px;
+            letter-spacing: -1.5px;
+        }
+    </style>
+</defs>
+<g transform="translate(15, 0)">
+    <path d="M 60 16 C 35.7 16 16 35.7 16 60 C 16 68.6 18.5 76.6 22.8 83.3 L 16 104 L 37.5 98 C 44.2 101.8 51.8 104 60 104 C 84.3 104 104 84.3 104 60 C 104 35.7 84.3 16 60 16 Z" fill="#167D6B"/>
+    <path d="M 42 62 L 54 74 L 78 46" fill="none" stroke="#FFFFFF" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/>
+</g>
+<text x="135" y="82" class="text">
+    <tspan fill="#167D6B">Catet</tspan><tspan fill="#2D2A26">In</tspan>
+</text>
+</svg>

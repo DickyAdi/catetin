@@ -21,9 +21,9 @@ const EXAMPLES = [
 
 export function ChatScreenshots() {
   return (
-    <section id="contoh" className="mx-auto max-w-content px-lg pb-section">
-      <h2 className="mb-md text-center text-display-md">Contoh Percakapan</h2>
-      <p className="mx-auto mb-xxl max-w-[560px] text-center text-body text-ink-muted">
+    <section id="contoh" className="mx-auto max-w-content px-lg pb-section dark:bg-surface-dark">
+      <h2 className="mb-md text-center text-display-md dark:text-on-dark">Contoh Percakapan</h2>
+      <p className="mx-auto mb-xxl max-w-[560px] text-center text-body text-ink-muted dark:text-on-dark-muted">
         Kamu chat seperti biasa. Bot langsung catat dan hitung untung-rugimu.
       </p>
       <div className="flex flex-wrap justify-center gap-xl">
