@@ -70,6 +70,16 @@ class FakeUserRepository:
         self._users[user_id] = updated
         return updated
 
+    async def set_business_name(self, user_id: int, name: str) -> User:
+        updated = self._users[user_id].model_copy(update={"business_name": name})
+        self._users[user_id] = updated
+        return updated
+
+    async def set_onboarded(self, user_id: int) -> User:
+        updated = self._users[user_id].model_copy(update={"has_onboarded": True})
+        self._users[user_id] = updated
+        return updated
+
     async def mark_blocked(self, user_id: int) -> User:
         updated = self._users[user_id].model_copy(
             update={"blocked_at": int(self._clock.now().timestamp())}

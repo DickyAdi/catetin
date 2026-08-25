@@ -22,6 +22,7 @@ class User(BaseModel):
     business_name: str | None = None
     timezone: str = "Asia/Jakarta"
     digest_enabled: bool = True
+    has_onboarded: bool = False
     blocked_at: int | None = None
     created_at: int
     updated_at: int
