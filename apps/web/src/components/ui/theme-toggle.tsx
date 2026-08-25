@@ -9,7 +9,7 @@ const STORAGE_KEY = "catetin-theme";
 // paint, to avoid FOUC on this prerendered site). This component owns the
 // *toggle*, so on mount it reads back whatever that script decided rather than
 // re-deriving it. Initial state is `false` so the prerendered markup and the
-// first client render agree — the effect corrects it immediately after.
+// first client render agree: the effect corrects it immediately after.
 export function ThemeToggle({ className }: { className?: string }) {
   const [isDark, setIsDark] = React.useState(false);
 

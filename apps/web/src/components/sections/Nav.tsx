@@ -15,7 +15,7 @@ const LINKS = [
 export function Nav() {
   return (
     <nav className="mx-auto flex max-w-content items-center justify-between px-lg py-lg dark:bg-surface-dark">
-      <Link to="/" className="flex items-center no-underline" aria-label="CatetIn — beranda">
+      <Link to="/" className="flex items-center no-underline" aria-label="CatetIn, beranda">
         {/*
           Two <img>s swapped by the `dark:` variant rather than one src picked in
           JS: the CSS swap is already correct at first paint (the inline theme

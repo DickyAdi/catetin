@@ -4,7 +4,7 @@ import { X } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 
-// Plain state-driven drawer instead of Radix Dialog — the focus-trap /
+// Plain state-driven drawer instead of Radix Dialog: the focus-trap /
 // scroll-lock / portal machinery there cost ~20KB gzip for a single mobile
 // hamburger menu, which blew the performance budget.
 interface SheetContextValue {
@@ -52,7 +52,7 @@ const SheetTrigger = React.forwardRef<
 });
 SheetTrigger.displayName = "SheetTrigger";
 
-// Clones its single child (always an <a> or similar) and wires up close-on-click —
+// Clones its single child (always an <a> or similar) and wires up close-on-click:
 // a hand-rolled equivalent of Radix's Slot, scoped to this one use case.
 function SheetClose({ children }: { children: React.ReactElement<{ onClick?: (e: React.MouseEvent) => void }> }) {
   const { setOpen } = useSheetContext();

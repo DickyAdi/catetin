@@ -3,7 +3,7 @@ import { ChevronDown } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 
-// Native <details>/<summary> instead of Radix — free accessibility and
+// Native <details>/<summary> instead of Radix: free accessibility and
 // disclosure state from the browser, at zero JS cost.
 const Accordion = React.forwardRef<HTMLDivElement, React.HTMLAttributes<HTMLDivElement>>(
   ({ className, ...props }, ref) => <div ref={ref} className={className} {...props} />,

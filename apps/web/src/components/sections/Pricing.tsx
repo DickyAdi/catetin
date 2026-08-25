@@ -1,6 +1,5 @@
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { CTA_LABEL, TELEGRAM_URL } from "@/lib/constants";
 
 export function Pricing() {
   return (
@@ -36,14 +35,17 @@ export function Pricing() {
             <li>Riwayat tanpa batas waktu</li>
             <li className="flex items-center gap-xs">
               Laporan keuangan lengkap (neraca)
-              <Badge variant="placeholder">Segera</Badge>
+              <Badge variant="placeholder">Menyusul</Badge>
             </li>
           </ul>
-          <Button asChild variant="primary" className="w-full">
-            <a href={TELEGRAM_URL} target="_blank" rel="noreferrer">
-              {CTA_LABEL}
-            </a>
-          </Button>
+          <div className="flex flex-col gap-sm">
+            <Button variant="primary" className="w-full" disabled>
+              Segera Hadir
+            </Button>
+            <p className="text-center text-body-small text-ink-faint dark:text-on-dark-muted">
+              Premium belum bisa dipesan. Coba dulu paket Gratis, ya.
+            </p>
+          </div>
         </div>
       </div>
     </section>
