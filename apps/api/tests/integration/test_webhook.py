@@ -10,6 +10,7 @@ from collections.abc import AsyncIterator
 import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy import text as sql_text
 from telegram import Bot
 
 from catetin import composition
@@ -33,6 +34,27 @@ def _text_update(update_id: int, user_id: int, text: str) -> dict:
         length = len(text.split(maxsplit=1)[0])
         message["entities"] = [{"type": "bot_command", "offset": 0, "length": length}]
     return {"update_id": update_id, "message": message}
+
+
+async def _mark_onboarded(app: FastAPI, telegram_user_id: int) -> None:
+    """Put a user past the `/start` flow so `/lapor` is not gated.
+
+    Upserts rather than driving the two-step flow over the webhook: these tests
+    are about the report, and the flow itself is covered end-to-end by
+    `test_webhook_start_flow_records_business_name_and_timezone` below plus
+    `tests/unit/test_onboarding_flow.py`.
+    """
+    state: AppState = app.state.catetin
+    async with state.writer_engine.begin() as conn:
+        await conn.execute(
+            sql_text(
+                "INSERT INTO users (platform, platform_user_id, has_onboarded) "
+                "VALUES ('telegram', :uid, 1) "
+                "ON CONFLICT (platform, platform_user_id) "
+                "DO UPDATE SET has_onboarded = 1"
+            ),
+            {"uid": str(telegram_user_id)},
+        )
 
 
 @pytest.fixture
@@ -205,6 +227,7 @@ async def test_webhook_lapor_command_sends_pdf_document(
     monkeypatch.setattr(Bot, "send_message", fake_send_message)
     monkeypatch.setattr(Bot, "send_document", fake_send_document)
 
+    await _mark_onboarded(app, 444555)
     response = await client.post(
         "/webhook/telegram/test-secret",
         json=_text_update(3004, 444555, "/lapor"),
@@ -239,6 +262,91 @@ def _callback_update(update_id: int, user_id: int, data: str) -> dict:
     }
 
 
+async def test_webhook_start_flow_records_business_name_and_timezone(
+    client: AsyncClient, app: FastAPI, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The `/start` state machine end-to-end over the real webhook: two typed
+    turns and two button taps, then `/lapor` is no longer gated."""
+    sent: list[tuple[int, str]] = []
+    documents: list[tuple[int, str]] = []
+
+    async def fake_send_message(self: Bot, chat_id: int, text: str, **_: object) -> None:
+        sent.append((chat_id, text))
+
+    async def fake_send_document(
+        self: Bot, chat_id: int, document: bytes, filename: str, **_: object
+    ) -> None:
+        documents.append((chat_id, filename))
+
+    async def fake_answer_callback_query(self: Bot, callback_query_id: str, **_: object) -> bool:
+        return True
+
+    monkeypatch.setattr(Bot, "send_message", fake_send_message)
+    monkeypatch.setattr(Bot, "send_document", fake_send_document)
+    monkeypatch.setattr(Bot, "answer_callback_query", fake_answer_callback_query)
+
+    state = app.state.catetin
+    user_id = 778899
+
+    for update in (
+        _text_update(4201, user_id, "/start"),
+        _text_update(4202, user_id, "Warung Mbok Rina"),
+        _callback_update(4203, user_id, "ob:save"),
+        _callback_update(4204, user_id, "tz:Asia/Makassar"),
+    ):
+        response = await client.post("/webhook/telegram/test-secret", json=update)
+        assert response.status_code == 200
+        await state.telegram_update_queue.join()
+
+    async with state.writer_engine.begin() as conn:
+        row = (
+            await conn.execute(
+                sql_text(
+                    "SELECT business_name, timezone, has_onboarded FROM users "
+                    "WHERE platform_user_id = :uid"
+                ),
+                {"uid": str(user_id)},
+            )
+        ).one()
+    assert row == ("Warung Mbok Rina", "Asia/Makassar", 1)
+    assert any("Siap!" in text for _, text in sent)
+
+    response = await client.post(
+        "/webhook/telegram/test-secret", json=_text_update(4205, user_id, "/lapor")
+    )
+    assert response.status_code == 200
+    await state.telegram_update_queue.join()
+    assert documents, "setup is complete, so /lapor must no longer be gated"
+
+
+async def test_webhook_lapor_is_gated_until_setup_is_done(
+    client: AsyncClient, app: FastAPI, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sent: list[tuple[int, str]] = []
+    documents: list[str] = []
+
+    async def fake_send_message(self: Bot, chat_id: int, text: str, **_: object) -> None:
+        sent.append((chat_id, text))
+
+    async def fake_send_document(
+        self: Bot, chat_id: int, document: bytes, filename: str, **_: object
+    ) -> None:
+        documents.append(filename)
+
+    monkeypatch.setattr(Bot, "send_message", fake_send_message)
+    monkeypatch.setattr(Bot, "send_document", fake_send_document)
+
+    state = app.state.catetin
+    response = await client.post(
+        "/webhook/telegram/test-secret", json=_text_update(4301, 991122, "/lapor")
+    )
+    assert response.status_code == 200
+    await state.telegram_update_queue.join()
+
+    assert documents == []
+    assert "belum setup" in sent[-1][1]
+
+
 async def test_webhook_lapor_with_flagged_shows_review_gate_then_sends_clean_pdf(
     client: AsyncClient, app: FastAPI, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -265,6 +373,7 @@ async def test_webhook_lapor_with_flagged_shows_review_gate_then_sends_clean_pdf
 
     state = app.state.catetin
     user_id = 665544
+    await _mark_onboarded(app, user_id)
 
     response = await client.post(
         "/webhook/telegram/test-secret",
@@ -318,6 +427,7 @@ async def test_webhook_lapor_without_flagged_sends_pdf_directly(
     monkeypatch.setattr(Bot, "send_document", fake_send_document)
 
     user_id = 665545
+    await _mark_onboarded(app, user_id)
     response = await client.post(
         "/webhook/telegram/test-secret", json=_text_update(4101, user_id, "jual ayam 50rb")
     )

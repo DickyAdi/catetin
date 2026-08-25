@@ -11,6 +11,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from datetime import date, timedelta
+from typing import Literal
 
 from catetin.adapters.outbound.reporting.text_renderer import (
     render_day_totals,
@@ -18,7 +19,11 @@ from catetin.adapters.outbound.reporting.text_renderer import (
 )
 from catetin.application.generate_report import GenerateReport, PendingReview
 from catetin.application.manage_transactions import ManageTransactions
-from catetin.application.onboarding import Onboarding
+from catetin.application.onboarding import (
+    MAX_BUSINESS_NAME_LEN,
+    Onboarding,
+    validate_business_name,
+)
 from catetin.application.record_transactions import RecordTransactions
 from catetin.application.summarize import Summarize
 from catetin.domain.errors import DomainValidationError, RateLimited
@@ -53,6 +58,43 @@ TZ_OPTIONS = (
     ("WIT", "Asia/Jayapura"),
 )
 
+# `/start` setup buttons. All four share one prefix so `on_callback` can route
+# on it in a single check; the payloads carry no state, the step lives in
+# `TelegramDeps.onboarding_pending`.
+OB_PREFIX = "ob:"
+OB_SAVE = "ob:save"
+OB_CANCEL = "ob:cancel"
+OB_REDO = "ob:redo"
+OB_SKIP_REDO = "ob:skip-redo"
+
+ASK_NAME = "Nama usaha kamu apa? (misal: Warung Mbok Rina)"
+_WELCOME = "Halo! 👋 Aku CatetIn, bot pencatatan keuangan buat usahamu.\n\n" + ASK_NAME
+INVALID_NAME = (
+    "Nama cuma boleh huruf, angka, spasi, - atau _ "
+    f"(maks {MAX_BUSINESS_NAME_LEN} huruf). Coba lagi:"
+)
+ASK_TIMEZONE = "Pilih zona waktumu:"
+ONBOARDING_DONE = "Siap! Coba kirim: jual ayam geprek 50rb"
+REDO_PROMPT = "Kamu udah selesai setup. Mau ulangi?"
+REDO_DECLINED = "Oke. Ketik /lapor buat laporan."
+ONBOARDING_CANCELLED = "Oke, onboarding dibatalkan. Ketik /start kapan aja."
+NOT_ONBOARDED = "Waduh, kamu belum setup nih. Ketik /start dulu ya 😊"
+ONBOARDING_EXPIRED = "Sesi setup kedaluwarsa, ketik /start lagi ya."
+
+OnboardingStep = Literal["awaiting_name", "confirming_name", "awaiting_timezone"]
+
+
+@dataclass(frozen=True)
+class OnboardingState:
+    """Where a user is in the `/start` flow.
+
+    `proposed_name` is set only in `confirming_name` — it is the name the user
+    typed, held until they tap ✅ so nothing is written before they agree.
+    """
+
+    step: OnboardingStep
+    proposed_name: str | None = None
+
 
 def _rupiah(amount: int) -> str:
     sign = "-" if amount < 0 else ""
@@ -78,6 +120,12 @@ class TelegramDeps:
     # user id — a single in-process cache is enough for a single-instance
     # bot; lost on restart, which just means the user re-sends the message.
     pending_choices: dict[int, list[ParsedTransaction]] = field(default_factory=dict)
+    # Users currently walking through `/start`, per internal user id. Same
+    # single-instance, lost-on-restart trade-off as `pending_choices`: a
+    # restart mid-setup just means the user types /start again, and because
+    # `has_onboarded` is only flipped at the very end, an abandoned run leaves
+    # their previous state untouched.
+    onboarding_pending: dict[int, OnboardingState] = field(default_factory=dict)
 
 
 def _deps(context: ContextTypes.DEFAULT_TYPE) -> TelegramDeps:
@@ -100,13 +148,53 @@ async def _ask_next_pending(deps: TelegramDeps, user: User) -> None:
     await deps.messaging.ask_choice(user.id, prompt, [CHOICE_SALE, CHOICE_EXPENSE, CHOICE_OTHER])
 
 
+async def _start_onboarding(deps: TelegramDeps, user: User, *, greet: bool) -> None:
+    """Step 1 — ask for the business name (overwrites any stale state)."""
+    deps.onboarding_pending[user.id] = OnboardingState(step="awaiting_name")
+    await deps.messaging.send_text(user.id, _WELCOME if greet else ASK_NAME)
+
+
+async def _propose_business_name(deps: TelegramDeps, user: User, raw: str) -> None:
+    """Step 1 continued — validate what was typed and ask to confirm it."""
+    name = validate_business_name(raw)
+    if name is None:
+        deps.onboarding_pending[user.id] = OnboardingState(step="awaiting_name")
+        await deps.messaging.send_text(user.id, INVALID_NAME)
+        return
+    deps.onboarding_pending[user.id] = OnboardingState(
+        step="confirming_name", proposed_name=name
+    )
+    await deps.messaging.ask_action(
+        user.id,
+        f"Simpan sebagai '{name}'?",
+        [("✅ Simpan", OB_SAVE), ("❌ Batal", OB_CANCEL)],
+    )
+
+
+async def _ask_onboarding_timezone(deps: TelegramDeps, user: User) -> None:
+    """Step 2 — the same keyboard `/zona` uses; its `tz:` callback finishes."""
+    deps.onboarding_pending[user.id] = OnboardingState(step="awaiting_timezone")
+    await deps.messaging.ask_action(
+        user.id, ASK_TIMEZONE, [(label, f"{TZ_PREFIX}{tz}") for label, tz in TZ_OPTIONS]
+    )
+
+
 async def on_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     deps = _deps(context)
     cmd = map_update(update)
     if cmd is None:
         return
     user = await _get_user(deps, cmd)
-    await deps.messaging.send_text(user.id, deps.onboarding.start_message(user.timezone))
+    if user.has_onboarded:
+        # Re-running setup is opt-in, and `has_onboarded` deliberately stays
+        # True for the whole redo: abandoning it halfway must not demote a
+        # working account back to "belum setup".
+        deps.onboarding_pending.pop(user.id, None)
+        await deps.messaging.ask_action(
+            user.id, REDO_PROMPT, [("✅ Ulangi", OB_REDO), ("❌ Gak usah", OB_SKIP_REDO)]
+        )
+        return
+    await _start_onboarding(deps, user, greet=True)
 
 
 async def on_today(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -164,6 +252,11 @@ async def on_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if cmd is None:
         return
     user = await _get_user(deps, cmd)
+    if deps.onboarding_pending.pop(user.id, None) is not None:
+        # Mid-setup, `/batal` means "get me out of this", not "undo my last
+        # transaction" — the flow is what is in front of the user right now.
+        await deps.messaging.send_text(user.id, ONBOARDING_CANCELLED)
+        return
     removed = await deps.manage_transactions.cancel_last(user.id)
     if removed is None:
         await deps.messaging.send_text(user.id, "Belum ada transaksi buat dibatalkan.")
@@ -183,6 +276,13 @@ async def on_report(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if cmd is None:
         return
     user = await _get_user(deps, cmd)
+    if not user.has_onboarded:
+        # The gate lives here, not in `GenerateReport`: onboarding is a chat
+        # concern, and the use case stays usable from the scheduler and ops.
+        # Only `/lapor` is gated — the quick summaries stay open so a user who
+        # started recording before `/start` still sees their numbers.
+        await deps.messaging.send_text(user.id, NOT_ONBOARDED)
+        return
     today = deps.clock.today_local(user.timezone)
     start = today - timedelta(days=WEEK_DAYS - 1)
 
@@ -264,6 +364,48 @@ async def _handle_review_callback(deps: TelegramDeps, update: Update, data: str)
     )
 
 
+async def _handle_onboarding_callback(deps: TelegramDeps, update: Update, data: str) -> None:
+    if update.effective_user is None:
+        return
+    user = await deps.onboarding.get_or_create_user(
+        "telegram", str(update.effective_user.id), update.effective_user.full_name
+    )
+
+    # The redo answers are stateless — they are offered to an already-onboarded
+    # user, so they must work even after a restart cleared `onboarding_pending`.
+    if data == OB_REDO:
+        await _start_onboarding(deps, user, greet=False)
+        return
+    if data == OB_SKIP_REDO:
+        deps.onboarding_pending.pop(user.id, None)
+        await deps.messaging.send_text(user.id, REDO_DECLINED)
+        return
+
+    state = deps.onboarding_pending.get(user.id)
+    if state is None or state.step != "confirming_name" or state.proposed_name is None:
+        # A keyboard from an abandoned run, or state lost to a restart: the
+        # name it referred to is gone, so there is nothing safe to save.
+        await deps.messaging.send_text(user.id, ONBOARDING_EXPIRED)
+        return
+
+    if data == OB_CANCEL:
+        deps.onboarding_pending[user.id] = OnboardingState(step="awaiting_name")
+        await deps.messaging.send_text(user.id, ASK_NAME)
+        return
+    if data != OB_SAVE:
+        return
+
+    try:
+        await deps.onboarding.set_business_name(user.id, state.proposed_name)
+    except DomainValidationError:
+        # Unreachable through our own keyboard (the name was validated before
+        # it was offered), but the use case is the authority on what is storable.
+        deps.onboarding_pending[user.id] = OnboardingState(step="awaiting_name")
+        await deps.messaging.send_text(user.id, INVALID_NAME)
+        return
+    await _ask_onboarding_timezone(deps, user)
+
+
 async def _handle_timezone_callback(deps: TelegramDeps, update: Update, data: str) -> None:
     if update.effective_user is None:
         return
@@ -275,9 +417,20 @@ async def _handle_timezone_callback(deps: TelegramDeps, update: Update, data: st
         await deps.onboarding.set_timezone(user.id, tz)
     except DomainValidationError:
         # Unreachable via the buttons we send; reachable if an old chat carries
-        # a callback we no longer offer.
+        # a callback we no longer offer. The pending step is left in place so a
+        # user mid-setup can just tap again.
         await deps.messaging.send_text(user.id, f"Zona waktu tidak dikenal: {tz}")
         return
+
+    state = deps.onboarding_pending.get(user.id)
+    if state is not None and state.step == "awaiting_timezone":
+        # Step 2 of `/start`: the zone tap is the last thing setup waits for.
+        del deps.onboarding_pending[user.id]
+        await deps.onboarding.complete_onboarding(user.id)
+        await deps.messaging.send_text(user.id, ONBOARDING_DONE)
+        await deps.messaging.send_text(user.id, deps.onboarding.guide_message(tz))
+        return
+
     await deps.messaging.send_text(user.id, f"Zona waktu diset ke {tz}.")
 
 
@@ -329,6 +482,19 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if cmd is None:
         return
     user = await _get_user(deps, cmd)
+
+    state = deps.onboarding_pending.get(user.id)
+    if state is not None:
+        # Setup owns the conversation until it finishes or is cancelled, so a
+        # typed message here is a business name — never a transaction. Without
+        # this, "Warung Mbok Rina" would fall through to the parser and come
+        # back as "nggak ketemu nominalnya".
+        if state.step == "awaiting_timezone":
+            await _ask_onboarding_timezone(deps, user)
+        else:
+            await _propose_business_name(deps, user, cmd.text)
+        return
+
     today = deps.clock.today_local(user.timezone)
     result = await deps.record_transactions.execute(user.id, cmd.text, today)
 
@@ -397,6 +563,10 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
     if data.startswith((REVIEW_EXCLUDE_PREFIX, REVIEW_KEEP_PREFIX)):
         await _handle_review_callback(deps, update, data)
+        return
+
+    if data.startswith(OB_PREFIX):
+        await _handle_onboarding_callback(deps, update, data)
         return
 
     if data.startswith(TZ_PREFIX):
