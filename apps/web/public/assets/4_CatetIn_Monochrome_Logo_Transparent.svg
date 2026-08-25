@@ -1,7 +1,12 @@
 <svg width="450" height="120" viewBox="0 0 450 120" xmlns="http://www.w3.org/2000/svg">
 <defs>
     <style>
-        @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@800&amp;display=swap');
+        @font-face {
+            font-family: 'Plus Jakarta Sans';
+            font-style: normal;
+            font-weight: 800;
+            src: url('fonts/PlusJakartaSans-ExtraBold.woff2') format('woff2');
+        }
         .text {
             font-family: 'Plus Jakarta Sans', sans-serif;
             font-weight: 800;
