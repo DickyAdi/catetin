@@ -4,7 +4,16 @@ export function Footer() {
   return (
     <footer className="bg-surface-dark px-lg py-xxl text-on-dark">
       <div className="mx-auto flex max-w-content flex-wrap items-center justify-between gap-lg">
-        <p className="text-body-small text-on-dark-muted">© 2026 CatetIn</p>
+        <div className="flex flex-col gap-sm">
+          <img
+            src="/assets/5_CatetIn_Dark_Logo_Transparent.svg"
+            alt="CatetIn"
+            width={120}
+            height={32}
+            className="h-8 w-auto object-contain"
+          />
+          <p className="text-body-small text-on-dark-muted">© 2026 CatetIn</p>
+        </div>
         <div className="flex gap-lg">
           <Link
             to="/kebijakan-privasi"

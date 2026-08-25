@@ -14,8 +14,14 @@ const LINKS = [
 export function Nav() {
   return (
     <nav className="mx-auto flex max-w-content items-center justify-between px-lg py-lg">
-      <Link to="/" className="text-lead font-bold text-ink no-underline">
-        CatetIn
+      <Link to="/" className="flex items-center no-underline" aria-label="CatetIn — beranda">
+        <img
+          src="/assets/1_CatetIn_Light_Logo_Transparent.svg"
+          alt="CatetIn"
+          width={135}
+          height={36}
+          className="h-9 w-auto object-contain"
+        />
       </Link>
 
       <div className="hidden items-center gap-xl desktop:flex">

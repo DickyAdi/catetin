@@ -2,6 +2,9 @@ import { Button } from "@/components/ui/button";
 import { CTA_LABEL, TELEGRAM_URL } from "@/lib/constants";
 import { BotBubble, Money, PhoneFrame, UserBubble } from "./ChatBubble";
 
+// No brand mark here on purpose: <Nav /> renders the full CatetIn logo immediately
+// above this section, so a second logo would repeat the same mark inside one viewport
+// and push the headline (the real hero) below the fold on mobile.
 export function Hero() {
   return (
     <section className="mx-auto max-w-content px-lg pb-section pt-xl text-center">
