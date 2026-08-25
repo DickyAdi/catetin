@@ -31,7 +31,7 @@ Perintah yang ada:
 • /zona — atur zona waktu
 
 Zona waktumu sekarang {timezone} (dipakai buat nentuin "hari ini"). \
-Kalau beda, ketik /zona Asia/Makassar.
+Kalau beda, ketik /zona lalu pilih zonamu.
 
 Data transaksimu cuma dipakai buat mencatat usahamu — baca kebijakan \
 privasi di catetin.id/privasi."""

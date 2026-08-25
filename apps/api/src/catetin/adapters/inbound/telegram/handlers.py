@@ -43,6 +43,16 @@ REVIEW_EXCLUDE_PREFIX = "review_exclude:"
 REVIEW_KEEP_PREFIX = "review_keep:"
 _REVIEW_SHOW_LIMIT = 20
 
+# `/zona` buttons. The callback carries the timezone itself rather than an
+# index into server-side state — unlike `choice:`, there is no pending session
+# to expire, so a tap works even after a restart.
+TZ_PREFIX = "tz:"
+TZ_OPTIONS = (
+    ("WIB", "Asia/Jakarta"),
+    ("WITA", "Asia/Makassar"),
+    ("WIT", "Asia/Jayapura"),
+)
+
 
 def _rupiah(amount: int) -> str:
     sign = "-" if amount < 0 else ""
@@ -254,6 +264,23 @@ async def _handle_review_callback(deps: TelegramDeps, update: Update, data: str)
     )
 
 
+async def _handle_timezone_callback(deps: TelegramDeps, update: Update, data: str) -> None:
+    if update.effective_user is None:
+        return
+    user = await deps.onboarding.get_or_create_user(
+        "telegram", str(update.effective_user.id), update.effective_user.full_name
+    )
+    tz = data.removeprefix(TZ_PREFIX)
+    try:
+        await deps.onboarding.set_timezone(user.id, tz)
+    except DomainValidationError:
+        # Unreachable via the buttons we send; reachable if an old chat carries
+        # a callback we no longer offer.
+        await deps.messaging.send_text(user.id, f"Zona waktu tidak dikenal: {tz}")
+        return
+    await deps.messaging.send_text(user.id, f"Zona waktu diset ke {tz}.")
+
+
 async def on_digest(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     deps = _deps(context)
     cmd = map_update(update)
@@ -278,13 +305,14 @@ async def on_timezone(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     user = await _get_user(deps, cmd)
     args = context.args or []
     if not args:
-        # Bare `/zona` reports the current setting rather than only the usage
+        # Bare `/zona` reports the current setting rather than only a usage
         # line — the timezone is guessed at signup, so "what is it now?" is
-        # the question users actually arrive with.
-        await deps.messaging.send_text(
+        # the question users actually arrive with — and offers the three
+        # Indonesian zones as buttons, so nobody has to type "Asia/Makassar".
+        await deps.messaging.ask_action(
             user.id,
-            f"Zona waktumu sekarang: {user.timezone}.\n"
-            "Mau ganti? Pakai: /zona Asia/Makassar",
+            f"Zona waktumu sekarang: {user.timezone}.\nPilih zona waktumu:",
+            [(label, f"{TZ_PREFIX}{tz}") for label, tz in TZ_OPTIONS],
         )
         return
     try:
@@ -369,6 +397,10 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
     if data.startswith((REVIEW_EXCLUDE_PREFIX, REVIEW_KEEP_PREFIX)):
         await _handle_review_callback(deps, update, data)
+        return
+
+    if data.startswith(TZ_PREFIX):
+        await _handle_timezone_callback(deps, update, data)
         return
 
     if not data.startswith("choice:"):
