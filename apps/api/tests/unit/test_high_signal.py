@@ -117,6 +117,31 @@ async def test_multi_segment_flags_only_the_matching_segment(parser: ParserPort)
     assert tepung_kind == "expense"
 
 
+@pytest.mark.parametrize(
+    ("text", "expected_flag"),
+    [
+        ("dapet duit 50k di jalan", True),
+        ("dapat uang 100rb", True),
+        ("gajian 5jt", True),
+        # "beli pulsa 50rb" is deliberately NOT flagged: PATTERNS is an
+        # income-side list ("windfall that isn't revenue"), and an explicit
+        # expense verb states a business cost — same reasoning as the
+        # "beli tepung"/"bayar listrik" cases asserted above.
+        ("beli pulsa 50rb", False),
+    ],
+)
+async def test_flag_survives_the_full_parse_for_qa_phrasings(
+    parser: ParserPort, text: str, expected_flag: bool
+) -> None:
+    """The flag must reach `ParsedTransaction`, including when the segment
+    also carries a sale verb ("dapet") that resolves `kind` outright — those
+    were the cases recorded as ordinary business income."""
+    result = await parser.parse(text, today=TODAY)
+
+    assert len(result) == 1
+    assert result[0].flagged is expected_flag
+
+
 async def test_flag_does_not_change_ambiguous_behavior(parser: ParserPort) -> None:
     """"gajian 2jt" has no sale/expense verb — kind stays ambiguous (None)
     regardless of the flag (FR-1: "Flag TIDAK mengubah perilaku ambiguous")."""

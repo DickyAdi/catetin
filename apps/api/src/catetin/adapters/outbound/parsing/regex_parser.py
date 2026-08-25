@@ -6,8 +6,12 @@ Async & Resource Design). Patterns handled, in the order components are
 extracted (most specific structural signal first):
 
     verb-prefixed   "jual <item> <amount>" / "beli <item> <amount>"
-    qty + unit       "<qty> <unit> <item> <amount>"   e.g. "3 pcs ayam 50rb"
-    trailing qty     "<item> <amount>/<qty>"          e.g. "ayam 50rb/2"
+    leading qty      "<qty> <unit> <item> <amount>"   e.g. "3 pcs ayam 50rb"
+                     -> <amount> is the line total
+    trailing qty     "<item> <qty> <unit> <amount>"   e.g. "ayam 5 ekor 10rb"
+                     -> <amount> is the per-unit price, total = qty x amount
+    slash qty        "<item> <amount>/<qty>"          e.g. "ayam 50rb/2"
+                     -> <amount> is the line total, split across <qty>
     plain item+amt   "<item> <amount>"                the fallback
 """
 
@@ -101,6 +105,21 @@ def _parse_segment(raw_segment: str, today: date) -> ParsedTransaction | FailedS
     chosen = max(amount_matches, key=lambda m: m.value)
     ambiguous_amount = len(amount_matches) > 1
     total_amount = chosen.value
+
+    # Where the quantity sits decides what the amount means:
+    #
+    #   "3 pcs ayam 50rb"      leading qty  -> shopping-list form, 50rb is
+    #                                          already the line total
+    #   "ayam 5 ekor 10rb"     trailing qty -> the amount follows a counted
+    #                                          unit, so it is the per-unit
+    #                                          price and the line total is
+    #                                          qty x amount (5 x 10rb = 50rb)
+    #
+    # The slash form ("ayam 50rb/2") is explicitly "50rb split across 2" and
+    # keeps its divide semantics, so it opts out.
+    amount_is_per_unit = qty_match is not None and qty_match.start() > 0 and slash_qty is None
+    if amount_is_per_unit and qty > 1:
+        total_amount *= qty
 
     if total_amount > amounts.MAX_PLAUSIBLE_AMOUNT:
         return FailedSegment(raw_text=raw_segment[:500], reason="amount_too_large")
