@@ -5,6 +5,7 @@ expected Indonesian labels across the 3 tiered zones (Report V1 FR-5).
 
 import asyncio
 import io
+import re
 
 from pypdf import PdfReader
 
@@ -62,6 +63,18 @@ def _extract_text(pdf_bytes: bytes) -> str:
     return "\n".join(page.extract_text() or "" for page in reader.pages)
 
 
+# fpdf2 emits one `BT <x> <y> Td (<text>) Tj ET` per cell. `extract_text`
+# throws the coordinates away, and they are exactly what a "does this label
+# collide with its amount?" check needs, so read them off the content stream.
+_TEXT_OP_RE = re.compile(r"BT ([\d.]+) ([\d.]+) Td \((.*?)\) Tj ET")
+
+
+def _placed_text(pdf_bytes: bytes, page: int = 0) -> list[tuple[float, float, str]]:
+    reader = PdfReader(io.BytesIO(pdf_bytes))
+    stream = reader.pages[page].get_contents().get_data().decode("latin-1")
+    return [(float(x), float(y), text) for x, y, text in _TEXT_OP_RE.findall(stream)]
+
+
 async def _render(
     day_totals: list[DayTotal] = DAY_TOTALS,
     sale_item_totals: list[ItemTotal] = SALE_ITEM_TOTALS,
@@ -109,6 +122,25 @@ async def test_render_pdf_contains_expected_labels() -> None:
     assert "Rp" in text
     assert "1.250.000" in text
     assert "Ayam Geprek" in text
+
+
+async def test_render_pdf_summary_amounts_sit_beside_their_labels() -> None:
+    """Regression: the "Pemasukan" label cell passed `new_x="LMARGIN"`, which
+    returned the cursor to the left margin, so its amount was drawn on top of
+    the label instead of in the value column (visible once the amount is wide,
+    e.g. "Rp 2.280.500"). "Pengeluaran" never had the bug — both rows must now
+    place the amount to the right of the label, on the label's own baseline.
+    """
+    pdf_bytes = await _render(
+        summary=Summary(income=2_280_500, expense=480_000, profit=1_800_500, count=12)
+    )
+    placed = _placed_text(pdf_bytes)  # page 1 = Ringkasan
+
+    for label, amount in (("Pemasukan", "Rp 2.280.500"), ("Pengeluaran", "Rp 480.000")):
+        label_x, label_y, _ = next(p for p in placed if p[2] == label)
+        amount_x, amount_y, _ = next(p for p in placed if p[2] == amount)
+        assert amount_y == label_y, f"{label}: amount is not on the label's baseline"
+        assert amount_x > label_x, f"{label}: amount overlaps the label (x={amount_x})"
 
 
 async def test_render_pdf_numbers_consistent_across_tiers() -> None:

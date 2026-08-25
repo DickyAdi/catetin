@@ -97,6 +97,59 @@ async def test_qty_and_unit(parser: ParserPort) -> None:
     assert tx.unit_amount == 16_666  # round down, total stays authoritative
 
 
+async def test_trailing_qty_unit_treats_the_amount_as_a_unit_price(
+    parser: ParserPort,
+) -> None:
+    """"jual ayam 5 ekor 10rb" — the quantity trails the item name and the
+    amount follows a counted unit, so 10rb is the price of one ekor and the
+    line total is 5 x 10rb. Contrast `test_qty_and_unit` above, where the
+    leading "3 pcs" makes 50rb the whole line's total."""
+    result = await parser.parse("jual ayam 5 ekor 10rb", today=TODAY)
+
+    assert len(result) == 1
+    tx = result[0]
+    assert tx.kind == "sale"
+    assert tx.item == "Ayam"
+    assert tx.qty == 5
+    assert tx.total_amount == 50_000
+    assert tx.unit_amount == 10_000
+
+
+async def test_trailing_qty_unit_without_a_verb(parser: ParserPort) -> None:
+    result = await parser.parse("es teh 3 gelas 5rb", today=TODAY)
+
+    assert len(result) == 1
+    tx = result[0]
+    assert tx.qty == 3
+    assert tx.total_amount == 15_000
+    assert tx.unit_amount == 5_000
+
+
+async def test_trailing_qty_of_one_leaves_the_amount_alone(parser: ParserPort) -> None:
+    result = await parser.parse("jual ayam 1 ekor 20rb", today=TODAY)
+
+    assert len(result) == 1
+    tx = result[0]
+    assert tx.qty == 1
+    assert tx.total_amount == 20_000
+    assert tx.unit_amount is None
+
+
+async def test_leading_qty_unit_after_a_verb_is_still_a_line_total(
+    parser: ParserPort,
+) -> None:
+    """Regression guard for the trailing-qty rule: stripping the verb must not
+    make a leading quantity look like a trailing one."""
+    result = await parser.parse("beli 2 kg tepung 30rb", today=TODAY)
+
+    assert len(result) == 1
+    tx = result[0]
+    assert tx.kind == "expense"
+    assert tx.qty == 2
+    assert tx.total_amount == 30_000
+    assert tx.unit_amount == 15_000
+
+
 async def test_trailing_slash_qty(parser: ParserPort) -> None:
     result = await parser.parse("ayam 50rb/2", today=TODAY)
 

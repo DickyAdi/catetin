@@ -90,6 +90,57 @@ async def test_webhook_text_message_is_dispatched_to_the_telegram_handler(
     assert "50.000" in sent[0][1]
 
 
+async def test_webhook_flagged_transaction_is_marked_in_the_reply(
+    client: AsyncClient, app: FastAPI, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """FR-1 end-to-end: "dapet duit" carries a sale verb, so it is recorded
+    without an ambiguity prompt. The flag must still be visible right away —
+    previously the reply was indistinguishable from real business income and
+    the flag only surfaced much later at `/lapor`'s review gate.
+    """
+    sent: list[tuple[int, str]] = []
+
+    async def fake_send_message(self: Bot, chat_id: int, text: str, **_: object) -> None:
+        sent.append((chat_id, text))
+
+    monkeypatch.setattr(Bot, "send_message", fake_send_message)
+
+    response = await client.post(
+        "/webhook/telegram/test-secret",
+        json=_text_update(3101, 555111, "dapet duit 50rb di jalan"),
+    )
+    assert response.status_code == 200
+
+    state = app.state.catetin
+    await state.telegram_update_queue.join()
+
+    assert sent, "the handler should have replied via MessagingPort"
+    reply = sent[0][1]
+    assert "50.000" in reply  # still recorded — the flag never rejects
+    assert "⚠️" in reply
+    assert "bukan pemasukan usaha" in reply
+
+
+async def test_webhook_plain_sale_reply_has_no_flag_warning(
+    client: AsyncClient, app: FastAPI, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sent: list[tuple[int, str]] = []
+
+    async def fake_send_message(self: Bot, chat_id: int, text: str, **_: object) -> None:
+        sent.append((chat_id, text))
+
+    monkeypatch.setattr(Bot, "send_message", fake_send_message)
+
+    await client.post(
+        "/webhook/telegram/test-secret",
+        json=_text_update(3102, 555222, "jual ayam geprek 50rb"),
+    )
+    await app.state.catetin.telegram_update_queue.join()
+
+    assert sent
+    assert "⚠️" not in sent[0][1]
+
+
 async def test_webhook_start_command_sends_welcome_message(
     client: AsyncClient, app: FastAPI, monkeypatch: pytest.MonkeyPatch
 ) -> None:

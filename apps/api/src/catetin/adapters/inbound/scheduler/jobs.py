@@ -8,9 +8,10 @@ frozen clock without going through `loop.py`'s sleep cycle.
 from __future__ import annotations
 
 import asyncio
+import itertools
 import logging
 import sqlite3
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from sqlalchemy.ext.asyncio import AsyncEngine
@@ -67,11 +68,28 @@ def _sqlite_path(database_url: str) -> str:
 def _vacuum_into(db_path: str, dest: Path) -> None:
     conn = sqlite3.connect(db_path)
     try:
-        # `dest` is built from our own date-stamped filename, never user
+        # `dest` is built from our own timestamped filename, never user
         # input, so string interpolation here carries no injection risk.
         conn.execute(f"VACUUM INTO '{dest}'")
     finally:
         conn.close()
+
+
+def _next_free_dest(backup_dir: Path, today: str, hhmmss: str) -> Path:
+    """A path `VACUUM INTO` will accept — it refuses to overwrite.
+
+    The second-resolution timestamp already makes same-day reruns (restart,
+    retry, a double instance) distinct; the counter only covers two runs
+    landing inside the same second.
+    """
+    dest = backup_dir / f"catetin-{today}-{hhmmss}.db"
+    if not dest.exists():
+        return dest
+    for n in itertools.count(2):
+        candidate = backup_dir / f"catetin-{today}-{hhmmss}-{n}.db"
+        if not candidate.exists():
+            return candidate
+    raise AssertionError("unreachable")  # pragma: no cover
 
 
 def _prune_old_backups(backup_dir: Path, keep_n: int) -> None:
@@ -82,7 +100,7 @@ def _prune_old_backups(backup_dir: Path, keep_n: int) -> None:
 
 def _do_backup(database_url: str, backup_dir: Path, today: str, keep_n: int) -> Path:
     backup_dir.mkdir(parents=True, exist_ok=True)
-    dest = backup_dir / f"catetin-{today}.db"
+    dest = _next_free_dest(backup_dir, today, datetime.now(UTC).strftime("%H%M%S"))
     _vacuum_into(_sqlite_path(database_url), dest)
     _prune_old_backups(backup_dir, keep_n)
     return dest
@@ -91,7 +109,14 @@ def _do_backup(database_url: str, backup_dir: Path, today: str, keep_n: int) -> 
 async def run_backup(
     database_url: str, backup_dir: Path, today: str, keep_n: int = DEFAULT_BACKUP_KEEP_N
 ) -> Path:
-    """`VACUUM INTO` a date-stamped file — safe against a live WAL database."""
+    """`VACUUM INTO` a timestamped file — safe against a live WAL database.
+
+    The filename carries the time as well as the date (`catetin-<date>-<HHMMSS>.db`)
+    because `VACUUM INTO` errors out rather than overwriting: with a date-only
+    name a second run on the same day (restart, retry, double instance) crashed
+    with "output file already exists". Retention stays with `_prune_old_backups`,
+    whose `catetin-*.db` glob still sorts oldest-first under this name.
+    """
     return await asyncio.to_thread(_do_backup, database_url, backup_dir, today, keep_n)
 
 

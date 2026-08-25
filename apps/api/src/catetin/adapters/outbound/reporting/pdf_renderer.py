@@ -111,7 +111,11 @@ def _render_page1_ringkasan(
     pdf.ln(4)
 
     pdf.set_font(_FONT, size=12)
-    pdf.cell(70, 7, "Pemasukan", new_x="LMARGIN")
+    # Label cells in a label/value row must NOT pass `new_x` — the cursor has
+    # to stay at the end of the 70-wide label column so the amount lands
+    # beside it. `new_x="LMARGIN"` here sends the amount back to x=15, on top
+    # of the label (only visible once the amount is wide, e.g. "Rp 2.280.500").
+    pdf.cell(70, 7, "Pemasukan")
     pdf.cell(0, 7, _rupiah(summary.income), new_x="LMARGIN", new_y="NEXT")
     pdf.cell(70, 7, "Pengeluaran")
     pdf.cell(0, 7, _rupiah(summary.expense), new_x="LMARGIN", new_y="NEXT")

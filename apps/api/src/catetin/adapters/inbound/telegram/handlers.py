@@ -96,7 +96,7 @@ async def on_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if cmd is None:
         return
     user = await _get_user(deps, cmd)
-    await deps.messaging.send_text(user.id, deps.onboarding.start_message())
+    await deps.messaging.send_text(user.id, deps.onboarding.start_message(user.timezone))
 
 
 async def on_today(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -278,7 +278,14 @@ async def on_timezone(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     user = await _get_user(deps, cmd)
     args = context.args or []
     if not args:
-        await deps.messaging.send_text(user.id, "Pakai: /zona Asia/Jakarta")
+        # Bare `/zona` reports the current setting rather than only the usage
+        # line — the timezone is guessed at signup, so "what is it now?" is
+        # the question users actually arrive with.
+        await deps.messaging.send_text(
+            user.id,
+            f"Zona waktumu sekarang: {user.timezone}.\n"
+            "Mau ganti? Pakai: /zona Asia/Makassar",
+        )
         return
     try:
         await deps.onboarding.set_timezone(user.id, args[0])
@@ -302,9 +309,23 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         lines.append(f"Tercatat {len(result.recorded)} transaksi:")
         for tx in result.recorded:
             marker = "+" if tx.kind == "sale" else "-"
-            lines.append(f"{marker}Rp {tx.total_amount:,}".replace(",", ".") + f" {tx.item}")
+            suffix = " ⚠️" if tx.flagged else ""
+            lines.append(
+                f"{marker}Rp {tx.total_amount:,}".replace(",", ".") + f" {tx.item}{suffix}"
+            )
         lines.append("")
         lines.append(f"Total hari ini: Rp {result.today_total.profit:,}".replace(",", "."))
+        if any(tx.flagged for tx in result.recorded):
+            # FR-1: the flag is metadata — it never rejects and never asks, so
+            # this is a passive note. Without it a flagged row with an
+            # unambiguous verb ("dapet duit 50k") was recorded looking exactly
+            # like business income, and the flag only became visible much
+            # later at `/lapor`'s review gate (FR-2).
+            lines.append("")
+            lines.append(
+                "⚠️ Ada yang kelihatannya bukan pemasukan usaha. "
+                "Pas /lapor nanti kamu bisa keluarkan dari laporan."
+            )
 
     for issue in result.issues:
         if issue.reason == "no_amount":
