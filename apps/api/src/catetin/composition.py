@@ -11,12 +11,18 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import cast
 
+import httpx
 from fastapi import FastAPI
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from telegram.ext import Application as TelegramApplication
 
 from .adapters.inbound.telegram import application as telegram_app
 from .adapters.inbound.telegram import handlers as telegram_handlers
+from .adapters.outbound.observability import (
+    GrafanaCloudObservability,
+    NullObservability,
+    StdoutObservability,
+)
 from .adapters.outbound.parsing.regex_parser import RegexParser
 from .adapters.outbound.persistence.engine import (
     create_reader_engine,
@@ -38,6 +44,7 @@ from .application.summarize import Summarize
 from .config import Settings
 from .domain.ports.clock import ClockPort
 from .domain.ports.messaging import MessagingPort
+from .domain.ports.observability import ObservabilityPort
 from .domain.ports.parser import ParserPort
 from .domain.ports.reporting import ReportRendererPort
 from .domain.ports.repositories import RateLimiterPort, UnitOfWork
@@ -66,6 +73,29 @@ class Dependencies:
     generate_report: GenerateReport
     messaging: MessagingPort
     telegram_application: TelegramApplication
+    observability: ObservabilityPort
+    # Non-None only for the grafana_cloud backend, which is the one adapter
+    # that owns an httpx client. The lifespan closes it on shutdown.
+    observability_client: httpx.AsyncClient | None
+
+
+def build_observability(
+    settings: Settings, backend: str | None = None
+) -> tuple[ObservabilityPort, httpx.AsyncClient | None]:
+    """Pick the ObservabilityPort adapter — the one place the backend is chosen.
+
+    Returns the adapter plus the httpx client it owns (if any), so the caller
+    can close what it created. Anything unrecognised falls back to the null
+    adapter: a typo in `CATETIN_OBSERVABILITY_BACKEND` should cost telemetry,
+    not startup.
+    """
+    choice = (backend or settings.observability_backend).lower()
+    if choice == "grafana_cloud":
+        client = httpx.AsyncClient()
+        return GrafanaCloudObservability(client, settings.otlp_endpoint), client
+    if choice == "stdout":
+        return StdoutObservability(), None
+    return NullObservability(), None
 
 
 def create_engines(settings: Settings) -> Engines:
@@ -80,9 +110,15 @@ def create_engines(settings: Settings) -> Engines:
     )
 
 
-def wire(settings: Settings, engines: Engines, polling: bool = False) -> Dependencies:
+def wire(
+    settings: Settings,
+    engines: Engines,
+    polling: bool = False,
+    observability_backend: str | None = None,
+) -> Dependencies:
     """Lifespan step 3: wire ports -> adapters, once the schema is verified."""
     clock = SystemClock()
+    observability, observability_client = build_observability(settings, observability_backend)
     parser = RegexParser()
     rate_limiter = SqliteRateLimiter(engines.writer_sessions, clock)
     renderer = cast(ReportRendererPort, PdfRenderer(concurrency=settings.pdf_concurrency))
@@ -110,11 +146,15 @@ def wire(settings: Settings, engines: Engines, polling: bool = False) -> Depende
     uow = writer_uow_factory()
 
     onboarding = Onboarding(uow)
-    record_transactions = RecordTransactions(parser, uow)
+    record_transactions = RecordTransactions(parser, uow, observability=observability)
     manage_transactions = ManageTransactions(uow)
     summarize = Summarize(uow)
     generate_report = GenerateReport(
-        uow, rate_limiter, renderer, max_per_user_hour=settings.pdf_max_per_user_hour
+        uow,
+        rate_limiter,
+        renderer,
+        max_per_user_hour=settings.pdf_max_per_user_hour,
+        observability=observability,
     )
 
     # The inbound Application and the outbound sender share one PTB Bot
@@ -147,6 +187,8 @@ def wire(settings: Settings, engines: Engines, polling: bool = False) -> Depende
         generate_report=generate_report,
         messaging=messaging,
         telegram_application=application,
+        observability=observability,
+        observability_client=observability_client,
     )
 
 

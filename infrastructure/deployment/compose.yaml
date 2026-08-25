@@ -1,0 +1,128 @@
+# CatetIn — production observability stack (VPS).
+#
+#   make infra-up / infra-down / infra-logs / infra-ps
+#
+# Three concerns, one file:
+#   dockerproxy    filters the Docker API so Alloy never touches the real socket
+#   alloy          collects container logs + journald + node metrics + app OTLP
+#   node-exporter  host CPU/RAM/disk for the Grafana Cloud dashboards
+#
+# The `api` service is included so this file describes a complete host. The
+# root compose.yaml is unchanged and still works standalone — use that one if
+# you only want the app, this one if you want the app *and* its telemetry.
+#
+# Requires infrastructure/deployment/.env (copy from .env.example). Compose
+# fails fast rather than starting an Alloy that 401s against Grafana Cloud
+# forever.
+
+name: catetin-deployment
+
+services:
+  dockerproxy:
+    image: tecnativa/docker-socket-proxy:latest
+    container_name: catetin-dockerproxy
+    # Needed so the proxy can reach the socket under SELinux/AppArmor. This
+    # container is the ONLY one on the host holding the real socket, and all
+    # it does is filter — see the grants below.
+    privileged: true
+    restart: unless-stopped
+    environment:
+      LOG_LEVEL: warning
+      # Exactly what Alloy's discovery.docker asks for, and no more.
+      # Everything not listed here stays revoked by default: AUTH, SECRETS,
+      # EXEC, BUILD, COMMIT, IMAGES, VOLUMES, ...
+      CONTAINERS: 1
+      # Required, empirically: discovery.docker computes network labels for
+      # every target, and without GET /networks it logs "Unable to refresh
+      # target groups ... 403 Forbidden" every refresh_interval and discovers
+      # nothing. Read-only listing, no container ever becomes reachable.
+      NETWORKS: 1
+      # Explicit even though 0 is the default: POST is what turns a read-only
+      # proxy into remote root. Do not enable it.
+      POST: 0
+    volumes:
+      # `:ro` on a unix socket is cosmetic (it guards the inode, not the
+      # protocol) — POST=0 above is the control that actually enforces
+      # read-only. Kept anyway as defence in depth.
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - obs-net
+
+  alloy:
+    image: grafana/alloy:latest
+    container_name: catetin-alloy
+    restart: unless-stopped
+    command:
+      - run
+      - --server.http.listen-addr=0.0.0.0:12345
+      - --storage.path=/var/lib/alloy/data
+      - /etc/alloy/config.alloy
+    environment:
+      GRAFANA_CLOUD_USER: ${GRAFANA_CLOUD_USER:?set it in infrastructure/deployment/.env}
+      GRAFANA_CLOUD_TOKEN: ${GRAFANA_CLOUD_TOKEN:?set it in infrastructure/deployment/.env}
+      GRAFANA_CLOUD_LOGS_URL: ${GRAFANA_CLOUD_LOGS_URL:?set it in infrastructure/deployment/.env}
+      GRAFANA_CLOUD_METRICS_URL: ${GRAFANA_CLOUD_METRICS_URL:?set it in infrastructure/deployment/.env}
+      GRAFANA_CLOUD_OTLP_URL: ${GRAFANA_CLOUD_OTLP_URL:?set it in infrastructure/deployment/.env}
+    volumes:
+      - ./alloy/config.alloy:/etc/alloy/config.alloy:ro
+      # Positions file — without it a restart re-ships every log it can still see.
+      - alloy-data:/var/lib/alloy/data
+      # No /var/log/journal mount: the official image has no journald support
+      # to use it (see section 2 of config.alloy).
+    ports:
+      # Alloy UI — localhost only, never the public interface.
+      - "127.0.0.1:12345:12345"
+      # OTLP (4318) is deliberately NOT published: the api container reaches it
+      # over obs-net as http://alloy:4318.
+    depends_on:
+      - dockerproxy
+    networks:
+      - obs-net
+
+  node-exporter:
+    image: prom/node-exporter:latest
+    container_name: catetin-node-exporter
+    restart: unless-stopped
+    command:
+      - --path.rootfs=/host
+      - --collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)
+    pid: host
+    volumes:
+      - /:/host:ro,rslave
+    networks:
+      - obs-net
+
+  api:
+    build:
+      # Same context as the root compose.yaml: the repo root, so the build can
+      # see the uv workspace root (pyproject.toml + uv.lock).
+      context: ../..
+      dockerfile: apps/api/Dockerfile
+    container_name: catetin-api
+    env_file:
+      - ../../apps/api/.env
+    environment:
+      CATETIN_DATABASE_URL: sqlite+aiosqlite:////data/catetin.db
+      CATETIN_BACKUP_DIR: /data/backups
+      # The app speaks OTLP to Alloy; only Alloy holds Grafana Cloud creds.
+      CATETIN_OBSERVABILITY_BACKEND: grafana_cloud
+      CATETIN_OTLP_ENDPOINT: http://alloy:4318
+    volumes:
+      - catetin_data:/data
+    ports:
+      - "8000:8000"
+    depends_on:
+      - alloy
+    restart: unless-stopped
+    networks:
+      - obs-net
+
+volumes:
+  alloy-data:
+  catetin_data:
+
+networks:
+  obs-net:
+    # NOT internal: Alloy needs egress to push to Grafana Cloud. The proxy's
+    # 2375 is still unreachable from outside — it is never published.
+    internal: false

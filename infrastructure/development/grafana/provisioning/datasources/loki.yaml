@@ -1,0 +1,12 @@
+# Auto-provisioned so `make infra-dev-up` gives a Grafana that can already
+# query logs — no click-through setup before the smoke test.
+apiVersion: 1
+
+datasources:
+  - name: Loki
+    type: loki
+    access: proxy
+    uid: catetin-dev-loki
+    url: http://loki:3100
+    isDefault: true
+    editable: false

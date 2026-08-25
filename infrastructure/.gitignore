@@ -1,0 +1,5 @@
+# Per-directory ignores, matching the repo's split-.gitignore convention.
+#
+# Real Grafana Cloud credentials — the .env.example next to it IS committed.
+deployment/.env
+development/.env

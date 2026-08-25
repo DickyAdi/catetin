@@ -18,6 +18,7 @@ from datetime import date
 
 from ..domain.errors import RateLimited
 from ..domain.models import DayTotal, Summary, Transaction
+from ..domain.ports.observability import ObservabilityPort
 from ..domain.ports.reporting import ReportRendererPort
 from ..domain.ports.repositories import RateLimiterPort, UnitOfWork
 
@@ -54,11 +55,14 @@ class GenerateReport:
         rate_limiter: RateLimiterPort,
         renderer: ReportRendererPort,
         max_per_user_hour: int = DEFAULT_MAX_PER_HOUR,
+        observability: ObservabilityPort | None = None,
     ) -> None:
         self._uow = uow
         self._rate_limiter = rate_limiter
         self._renderer = renderer
         self._max_per_user_hour = max_per_user_hour
+        # See RecordTransactions for why this is optional rather than required.
+        self._obs = observability
 
     async def execute(
         self, user_id: int, start: date, end: date, period_label: str = "Laporan"
@@ -105,33 +109,62 @@ class GenerateReport:
         """Renders unconditionally — no rate limit check, no review gate.
         Used for periods with nothing flagged, and after the user has
         resolved a review gate (whether by excluding or keeping)."""
-        async with self._uow as uow:
-            user = await uow.users.get_by_id(user_id)
-            summary = await uow.transactions.summarize_range(
-                user_id, start.isoformat(), end.isoformat()
-            )
-            day_totals = await uow.transactions.daily_totals(
-                user_id, start.isoformat(), end.isoformat()
-            )
-            sale_item_totals = await uow.transactions.top_items(
-                user_id, "sale", limit=TOP_ITEMS_LIMIT
-            )
-            expense_item_totals = await uow.transactions.top_items(
-                user_id, "expense", limit=TOP_ITEMS_LIMIT
-            )
-            transactions = await uow.transactions.list_in_period(
-                user_id, start.isoformat(), end.isoformat()
-            )
+        try:
+            async with self._uow as uow:
+                user = await uow.users.get_by_id(user_id)
+                summary = await uow.transactions.summarize_range(
+                    user_id, start.isoformat(), end.isoformat()
+                )
+                day_totals = await uow.transactions.daily_totals(
+                    user_id, start.isoformat(), end.isoformat()
+                )
+                sale_item_totals = await uow.transactions.top_items(
+                    user_id, "sale", limit=TOP_ITEMS_LIMIT
+                )
+                expense_item_totals = await uow.transactions.top_items(
+                    user_id, "expense", limit=TOP_ITEMS_LIMIT
+                )
+                transactions = await uow.transactions.list_in_period(
+                    user_id, start.isoformat(), end.isoformat()
+                )
 
-        business_name = user.business_name if user else None
-        pdf_bytes = await self._renderer.render_pdf(
-            user_id,
-            summary,
-            day_totals,
-            sale_item_totals,
-            expense_item_totals,
-            transactions,
-            business_name,
-            period_label,
-        )
+            business_name = user.business_name if user else None
+            pdf_bytes = await self._renderer.render_pdf(
+                user_id,
+                summary,
+                day_totals,
+                sale_item_totals,
+                expense_item_totals,
+                transactions,
+                business_name,
+                period_label,
+            )
+        except Exception as exc:
+            # PDF rendering is the most failure-prone thing this app does
+            # (fpdf2, fonts, unbounded row counts) and the user only ever
+            # sees a generic apology — so the detail has to leave here.
+            if self._obs is not None:
+                await self._obs.log_exception(
+                    exc,
+                    {
+                        "use_case": "generate_report",
+                        "user_id": user_id,
+                        "start": start.isoformat(),
+                        "end": end.isoformat(),
+                        "period_label": period_label,
+                    },
+                )
+            raise
+
+        if self._obs is not None:
+            await self._obs.log_event(
+                "info",
+                "report_generated",
+                user_id=user_id,
+                period_label=period_label,
+                start=start.isoformat(),
+                end=end.isoformat(),
+                pdf_bytes=len(pdf_bytes),
+                transactions=summary.count,
+            )
         return ReportResult(pdf_bytes=pdf_bytes, summary=summary, day_totals=day_totals)
