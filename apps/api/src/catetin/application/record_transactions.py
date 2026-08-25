@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from datetime import date
 
 from ..domain.models import ParsedTransaction, Summary, Transaction
+from ..domain.ports.observability import ObservabilityPort
 from ..domain.ports.parser import ParserPort
 from ..domain.ports.repositories import UnitOfWork
 
@@ -41,9 +42,18 @@ class RecordResult:
 
 
 class RecordTransactions:
-    def __init__(self, parser: ParserPort, uow: UnitOfWork) -> None:
+    def __init__(
+        self,
+        parser: ParserPort,
+        uow: UnitOfWork,
+        observability: ObservabilityPort | None = None,
+    ) -> None:
         self._parser = parser
         self._uow = uow
+        # Optional so callers that don't care about telemetry (most tests)
+        # stay a two-argument construction. `composition.wire()` always
+        # passes an adapter — the null one unless configured otherwise.
+        self._obs = observability
 
     async def execute(
         self, user_id: int, raw_text: str, today: date, *, slang_enabled: bool = True
@@ -65,6 +75,21 @@ class RecordTransactions:
                 await uow.parse_failures.add(user_id, issue.raw_text, issue.reason)
             today_total = await uow.transactions.summarize_range(user_id, today_str, today_str)
             await uow.commit()
+
+        # Telemetry after the commit, never inside the transaction — a slow
+        # collector must not hold the writer connection (pool_size=1) open.
+        if self._obs is not None and issues:
+            for issue in issues:
+                await self._obs.log_event(
+                    "warning",
+                    "parse_failed",
+                    user_id=user_id,
+                    reason=issue.reason,
+                    segment=issue.raw_text,
+                )
+            await self._obs.record_metric(
+                "parse_failure_total", float(len(issues)), {"source": "record_transactions"}
+            )
 
         return RecordResult(
             recorded=recorded, issues=issues, ambiguous=ambiguous, today_total=today_total

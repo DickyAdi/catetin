@@ -33,3 +33,10 @@ class Settings(BaseSettings):
     digest_hour_local: int = 21
     backup_dir: str = "./backups"
     backup_keep_n: int = 7
+
+    # Observability — which ObservabilityPort adapter composition wires up.
+    # "null" (default) keeps tests and local runs off the network entirely;
+    # "grafana_cloud" talks OTLP/HTTP to the Alloy collector, which holds the
+    # Grafana Cloud credentials (the app never does).
+    observability_backend: str = "null"  # null | stdout | grafana_cloud
+    otlp_endpoint: str = "http://alloy:4318"

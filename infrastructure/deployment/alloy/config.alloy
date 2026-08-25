@@ -1,0 +1,157 @@
+// CatetIn — Alloy collector, production (Grafana Cloud).
+//
+// Three sources in, three Grafana Cloud backends out:
+//
+//   docker logs   ──────► loki.write "grafanacloud"               (Loki)
+//   node-exporter ──────► prometheus.remote_write "grafanacloud"  (Mimir)
+//   app OTLP:4318 ──────► otelcol.exporter.otlphttp "grafanacloud" (Loki/Mimir/Tempo)
+//
+// (journald is a fourth source in the design doc — see section 2 for why the
+// container image cannot run it.)
+//
+// Credentials come from the container environment (see compose.yaml +
+// .env.example) and never live in this file.
+//
+// Credential lookups use `sys.env()`, not the older `env()` the design doc
+// shows: `alloy validate` flags `env()` as a deprecated stdlib function on
+// current images. Both still work today; only this spelling will survive.
+//
+// Verified with: docker run --rm -v $PWD/config.alloy:/cfg.alloy:ro \
+//   grafana/alloy:latest validate /cfg.alloy
+
+logging {
+	level  = "info"
+	format = "logfmt"
+}
+
+// ── 1. Container logs, via the socket proxy ─────────────────────────────────
+// tcp://dockerproxy:2375, NEVER unix:///var/run/docker.sock — the whole point
+// of the proxy is that this process cannot reach the real socket.
+
+discovery.docker "catetin" {
+	host             = "tcp://dockerproxy:2375"
+	refresh_interval = "15s"
+}
+
+// Turn Docker's metadata into useful Loki labels; without this every stream
+// is labelled only "app=catetin" and you cannot tell api from alloy.
+discovery.relabel "catetin" {
+	targets = discovery.docker.catetin.targets
+
+	// Ours only. discovery.docker returns EVERY container on the host, so
+	// without this the collector labels unrelated stacks as app="catetin" and
+	// ships their logs to Grafana Cloud — someone else's data against our
+	// 50 GB free tier. Containers started outside compose have no project
+	// label and are dropped too.
+	rule {
+		source_labels = ["__meta_docker_container_label_com_docker_compose_project"]
+		regex         = "catetin.*"
+		action        = "keep"
+	}
+
+	rule {
+		source_labels = ["__meta_docker_container_name"]
+		regex         = "/(.*)"
+		target_label  = "container"
+	}
+
+	rule {
+		source_labels = ["__meta_docker_container_log_stream"]
+		target_label  = "stream"
+	}
+}
+
+loki.source.docker "catetin" {
+	host       = "tcp://dockerproxy:2375"
+	targets    = discovery.relabel.catetin.output
+	labels     = {"app" = "catetin", "env" = "production"}
+	forward_to = [loki.write.grafanacloud.receiver]
+}
+
+// ── 2. systemd journal (API running outside Docker, plus host daemons) ──────
+//
+// DISABLED, and it has to be: `loki.source.journald` does not exist in the
+// official grafana/alloy container image (journal support needs cgo +
+// libsystemd, which that image is not built with). `alloy validate` rejects
+// the block outright — "cannot find the definition of component name" — so
+// leaving it live would mean a collector that refuses to start.
+//
+// Everything on this host runs in Docker, so section 1 already covers the API.
+// To collect the host's journal too, install Alloy as a host package (the
+// .deb/.rpm builds DO include journal support), give it this block, and mount
+// nothing — it reads /var/log/journal directly as root.
+//
+// loki.source.journald "system" {
+//   format_as_json = true
+//   labels         = {"app" = "system", "env" = "production"}
+//   forward_to     = [loki.write.grafanacloud.receiver]
+// }
+
+// ── 3. Host metrics (CPU / RAM / disk of the 2 vCPU VPS) ────────────────────
+
+prometheus.scrape "node" {
+	targets    = [{"__address__" = "node-exporter:9100", "instance" = "catetin-vps"}]
+	forward_to = [prometheus.remote_write.grafanacloud.receiver]
+}
+
+// ── 4. Application telemetry (ObservabilityPort -> OTLP/HTTP) ───────────────
+// This is what GrafanaCloudObservability posts to: alloy:4318/v1/{logs,metrics,traces}.
+
+otelcol.receiver.otlp "app" {
+	http {
+		endpoint = "0.0.0.0:4318"
+	}
+
+	output {
+		logs    = [otelcol.processor.batch.app.input]
+		metrics = [otelcol.processor.batch.app.input]
+		traces  = [otelcol.processor.batch.app.input]
+	}
+}
+
+otelcol.processor.batch "app" {
+	output {
+		logs    = [otelcol.exporter.otlphttp.grafanacloud.input]
+		metrics = [otelcol.exporter.otlphttp.grafanacloud.input]
+		traces  = [otelcol.exporter.otlphttp.grafanacloud.input]
+	}
+}
+
+otelcol.auth.basic "grafanacloud" {
+	username = sys.env("GRAFANA_CLOUD_USER")
+	password = sys.env("GRAFANA_CLOUD_TOKEN")
+}
+
+// ── 5. Grafana Cloud exporters ──────────────────────────────────────────────
+
+loki.write "grafanacloud" {
+	endpoint {
+		// e.g. https://logs-prod-xxx.grafana.net/loki/api/v1/push
+		url = sys.env("GRAFANA_CLOUD_LOGS_URL")
+
+		basic_auth {
+			username = sys.env("GRAFANA_CLOUD_USER")
+			password = sys.env("GRAFANA_CLOUD_TOKEN")
+		}
+	}
+}
+
+prometheus.remote_write "grafanacloud" {
+	endpoint {
+		// e.g. https://prometheus-prod-xxx.grafana.net/api/prom/push
+		url = sys.env("GRAFANA_CLOUD_METRICS_URL")
+
+		basic_auth {
+			username = sys.env("GRAFANA_CLOUD_USER")
+			password = sys.env("GRAFANA_CLOUD_TOKEN")
+		}
+	}
+}
+
+otelcol.exporter.otlphttp "grafanacloud" {
+	client {
+		// e.g. https://otlp-gateway-prod-xxx.grafana.net/otlp
+		endpoint = sys.env("GRAFANA_CLOUD_OTLP_URL")
+		auth     = otelcol.auth.basic.grafanacloud.handler
+	}
+}

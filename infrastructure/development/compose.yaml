@@ -1,0 +1,133 @@
+# CatetIn — local dev + observability smoke test. No Grafana Cloud account,
+# no credentials, no egress.
+#
+#   make infra-dev-up / infra-dev-down
+#
+# Same collector topology as production (app -> Alloy -> log store, container
+# logs read through the socket proxy), with the managed backends swapped for a
+# single-binary Loki and a local Grafana. That is the point: if telemetry flows
+# here, the only thing standing between it and Grafana Cloud is a URL and a
+# token.
+#
+#   Grafana   http://localhost:3001  (anonymous admin, Loki pre-provisioned)
+#   Loki      http://localhost:3100
+#   Alloy UI  http://localhost:12345
+#   API       http://localhost:8000
+#
+# Host port 3001, not 3000 — 3000 is commonly taken (Outline, other Grafanas).
+# Do not run this at the same time as the deployment stack; they collide on
+# 8000/12345.
+
+name: catetin-development
+
+services:
+  dockerproxy:
+    image: tecnativa/docker-socket-proxy:latest
+    container_name: catetin-dev-dockerproxy
+    privileged: true
+    restart: unless-stopped
+    environment:
+      LOG_LEVEL: warning
+      # Identical grants to production — dev should exercise the same
+      # read-only surface, or it is not a smoke test of anything.
+      # NETWORKS is required by discovery.docker; see deployment/compose.yaml.
+      CONTAINERS: 1
+      NETWORKS: 1
+      POST: 0
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - obs-net
+
+  loki:
+    image: grafana/loki:3.7.0
+    container_name: catetin-dev-loki
+    restart: unless-stopped
+    # The image ships a working single-binary filesystem config; OTLP
+    # ingestion at /otlp/v1/logs is on by default in Loki 3.x.
+    command: -config.file=/etc/loki/local-config.yaml
+    ports:
+      - "127.0.0.1:3100:3100"
+    volumes:
+      - loki-data:/loki
+    networks:
+      - obs-net
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: catetin-dev-grafana
+    restart: unless-stopped
+    environment:
+      # Local-only throwaway instance: skip the login wall so `make
+      # infra-dev-up` lands you straight in Explore.
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+      GF_AUTH_DISABLE_LOGIN_FORM: "true"
+    ports:
+      - "127.0.0.1:3001:3000"
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - grafana-data:/var/lib/grafana
+    depends_on:
+      - loki
+    networks:
+      - obs-net
+
+  alloy:
+    image: grafana/alloy:latest
+    container_name: catetin-dev-alloy
+    restart: unless-stopped
+    command:
+      - run
+      - --server.http.listen-addr=0.0.0.0:12345
+      - --storage.path=/var/lib/alloy/data
+      - /etc/alloy/config.alloy
+    volumes:
+      - ./alloy/config.alloy:/etc/alloy/config.alloy:ro
+      - alloy-data:/var/lib/alloy/data
+    ports:
+      - "127.0.0.1:12345:12345"
+      # Published in dev only, so an API started with `make dev-api` on the
+      # host can post OTLP too (CATETIN_OTLP_ENDPOINT=http://localhost:4318).
+      - "127.0.0.1:4318:4318"
+    depends_on:
+      - dockerproxy
+      - loki
+    networks:
+      - obs-net
+
+  api:
+    build:
+      context: ../..
+      dockerfile: apps/api/Dockerfile
+    container_name: catetin-dev-api
+    env_file:
+      # Optional so `docker compose config` works on a fresh clone. The API
+      # still needs real Telegram/ops values to boot — `make setup` seeds them.
+      - path: ../../apps/api/.env
+        required: false
+    environment:
+      CATETIN_DATABASE_URL: sqlite+aiosqlite:////data/catetin.db
+      CATETIN_BACKUP_DIR: /data/backups
+      # "grafana_cloud" is the OTLP adapter, not a hosted-only one — pointed at
+      # the local Alloy it exercises the exact production code path. Swap to
+      # "stdout" to watch events land in Loki via the docker log tail instead.
+      CATETIN_OBSERVABILITY_BACKEND: grafana_cloud
+      CATETIN_OTLP_ENDPOINT: http://alloy:4318
+    volumes:
+      - catetin-dev-data:/data
+    ports:
+      - "8000:8000"
+    depends_on:
+      - alloy
+    networks:
+      - obs-net
+
+volumes:
+  alloy-data:
+  loki-data:
+  grafana-data:
+  catetin-dev-data:
+
+networks:
+  obs-net:

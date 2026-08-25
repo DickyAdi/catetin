@@ -121,6 +121,9 @@ def build_lifespan(
             await deps.telegram_application.stop()
             await deps.telegram_application.shutdown()
 
+            if deps.observability_client is not None:
+                await deps.observability_client.aclose()
+
             await engines.writer.dispose()
             await engines.reader.dispose()
 

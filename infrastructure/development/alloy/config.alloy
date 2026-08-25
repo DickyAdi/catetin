@@ -1,0 +1,96 @@
+// CatetIn — Alloy collector, local development.
+//
+// Same shape as infrastructure/deployment/alloy/config.alloy, with the
+// Grafana Cloud exporters swapped for a local Loki. No credentials, no egress.
+//
+//   docker logs   ──► loki.write "local"        ──► http://loki:3100
+//   app OTLP:4318 ──► otelcol.exporter.otlphttp ──► http://loki:3100/otlp
+//
+// Not here (nothing local to receive them):
+//   - journald: dev machines may not even have /var/log/journal
+//   - metrics/traces: no Mimir/Tempo locally, so they are dropped at the
+//     receiver (see the empty output lists below)
+
+logging {
+	level  = "info"
+	format = "logfmt"
+}
+
+// ── 1. Container logs, via the socket proxy ─────────────────────────────────
+// tcp://dockerproxy:2375 in dev too — same read-only path as production.
+
+discovery.docker "catetin" {
+	host             = "tcp://dockerproxy:2375"
+	refresh_interval = "15s"
+}
+
+discovery.relabel "catetin" {
+	targets = discovery.docker.catetin.targets
+
+	// Ours only — see the deployment config for why this matters. In dev the
+	// symptom is loud: every other container on your machine shows up in
+	// Grafana under app="catetin".
+	rule {
+		source_labels = ["__meta_docker_container_label_com_docker_compose_project"]
+		regex         = "catetin.*"
+		action        = "keep"
+	}
+
+	rule {
+		source_labels = ["__meta_docker_container_name"]
+		regex         = "/(.*)"
+		target_label  = "container"
+	}
+
+	rule {
+		source_labels = ["__meta_docker_container_log_stream"]
+		target_label  = "stream"
+	}
+}
+
+loki.source.docker "catetin" {
+	host       = "tcp://dockerproxy:2375"
+	targets    = discovery.relabel.catetin.output
+	labels     = {"app" = "catetin", "env" = "development"}
+	forward_to = [loki.write.local.receiver]
+}
+
+// ── 2. Application telemetry (ObservabilityPort -> OTLP/HTTP) ───────────────
+
+otelcol.receiver.otlp "app" {
+	http {
+		endpoint = "0.0.0.0:4318"
+	}
+
+	output {
+		logs = [otelcol.processor.batch.app.input]
+		// Dropped in dev — no local metrics/traces backend to send them to.
+		metrics = []
+		traces  = []
+	}
+}
+
+otelcol.processor.batch "app" {
+	output {
+		logs = [otelcol.exporter.otlphttp.local.input]
+	}
+}
+
+// ── 3. Local exporters ──────────────────────────────────────────────────────
+
+loki.write "local" {
+	endpoint {
+		url = "http://loki:3100/loki/api/v1/push"
+	}
+}
+
+otelcol.exporter.otlphttp "local" {
+	client {
+		// Loki 3.x ingests OTLP natively at /otlp/v1/logs.
+		endpoint = "http://loki:3100/otlp"
+
+		tls {
+			insecure = true
+		}
+	}
+}
