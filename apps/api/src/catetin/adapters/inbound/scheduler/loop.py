@@ -87,6 +87,7 @@ async def run_once(
                 Path(settings.backup_dir),
                 today.isoformat(),
                 settings.backup_keep_n,
+                settings.backup_age_recipient,
             ),
         )
         state.last_backup = today
