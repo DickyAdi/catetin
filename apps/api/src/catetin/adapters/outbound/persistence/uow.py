@@ -16,10 +16,14 @@ from sqlalchemy.orm import with_loader_criteria
 from catetin.domain.ports.clock import ClockPort
 
 from .models import TransactionRow
+from .repositories.deletion_log.deletion_log_repository import (
+    SqlAlchemyDeletionLogRepository,
+)
 from .repositories.inbox.inbox_repository import SqlAlchemyInboxRepository
 from .repositories.parse_failure.parse_failure_repository import (
     SqlAlchemyParseFailureRepository,
 )
+from .repositories.rate_limit.rate_limit_repository import SqlAlchemyRateLimitRepository
 from .repositories.transaction.transaction_repository import (
     SqlAlchemyTransactionRepository,
 )
@@ -54,6 +58,11 @@ class SqlAlchemyUnitOfWork:
         self.transactions = SqlAlchemyTransactionRepository(self.session, self._clock)
         self.inbox = SqlAlchemyInboxRepository(self.session, self._clock)
         self.parse_failures = SqlAlchemyParseFailureRepository(self.session)
+        # Purge-only companions to the four above; see their modules for why
+        # they hang off the session rather than owning one (`/hapusakun` has
+        # to erase every table in a single transaction).
+        self.rate_limits = SqlAlchemyRateLimitRepository(self.session)
+        self.deletion_log = SqlAlchemyDeletionLogRepository(self.session)
         return self
 
     async def __aexit__(

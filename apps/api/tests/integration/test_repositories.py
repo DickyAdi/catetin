@@ -7,13 +7,16 @@ soft-delete `with_loader_criteria` filter installed on the session.
 
 from datetime import date
 
+import orjson
 import pytest
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from catetin.adapters.outbound.persistence.repositories.rate_limit.rate_limiter import (
     SqliteRateLimiter,
 )
 from catetin.adapters.outbound.persistence.uow import SqlAlchemyUnitOfWork
+from catetin.application.delete_account import DeleteAccount
 from catetin.domain.models import ParsedTransaction
 from tests.fakes.frozen_clock import FrozenClock
 
@@ -410,3 +413,145 @@ async def test_rate_limiter_buckets_are_independent(
     assert await limiter.check_and_increment(user.id, "pdf", limit=1, window_seconds=3600)
     assert not await limiter.check_and_increment(user.id, "pdf", limit=1, window_seconds=3600)
     assert await limiter.check_and_increment(user.id, "digest", limit=1, window_seconds=3600)
+
+
+# --- `/hapusakun` erasure, against real SQL --------------------------------
+#
+# The unit tests in `tests/unit/test_delete_account.py` drive the same use
+# case against fakes. These exist for the two things a fake cannot prove: that
+# a Core `delete()` really does bypass the session's soft-delete
+# `with_loader_criteria` (an ORM round trip here would silently skip every
+# `/batal`'d row), and that the whole purge commits or rolls back as one.
+
+
+async def _seed_account(
+    uow: SqlAlchemyUnitOfWork,
+    sessionmaker: async_sessionmaker[AsyncSession],
+    clock: FrozenClock,
+    platform_user_id: str,
+    update_id: int,
+) -> int:
+    """A user with a row in every table `/hapusakun` has to reach."""
+    async with uow as u:
+        user = await u.users.create("telegram", platform_user_id)
+        await u.transactions.add(user.id, _parsed("aktif"))
+        await u.transactions.add(user.id, _parsed("dibatalkan"))
+        await u.transactions.soft_delete_last(user.id)
+        await u.parse_failures.add(user.id, "laris manis hari ini", "no_amount")
+        await u.inbox.add_if_new(
+            update_id,
+            orjson.dumps(
+                {
+                    "update_id": update_id,
+                    "message": {
+                        "message_id": 1,
+                        "from": {"id": int(platform_user_id), "is_bot": False},
+                        "chat": {"id": int(platform_user_id), "type": "private"},
+                        "text": "jual kopi 15rb",
+                    },
+                }
+            ),
+        )
+        await u.commit()
+
+    limiter = SqliteRateLimiter(sessionmaker, clock)
+    await limiter.check_and_increment(user.id, "pdf", limit=5, window_seconds=3600)
+    return user.id
+
+
+async def test_purge_user_erases_soft_deleted_transactions_too(
+    uow: SqlAlchemyUnitOfWork,
+    sessionmaker: async_sessionmaker[AsyncSession],
+    clock: FrozenClock,
+) -> None:
+    """The bug this guards: an ORM select-then-delete inherits the session's
+    `deleted_at IS NULL` criteria and would leave every `/batal`'d row (and
+    its `raw_text`) in the database forever."""
+    user_id = await _seed_account(uow, sessionmaker, clock, "7001", 701)
+
+    async with uow as u:
+        assert await u.transactions.count_for_user(user_id) == 2  # 1 live, 1 soft-deleted
+        purged = await u.transactions.purge_user(user_id)
+        await u.commit()
+
+    assert purged == 2
+    async with uow as u:
+        assert await u.transactions.count_for_user(user_id) == 0
+        rows = (
+            await u.session.execute(
+                text("SELECT COUNT(*) FROM transactions WHERE user_id = :uid"),
+                {"uid": user_id},
+            )
+        ).scalar_one()
+    assert rows == 0
+
+
+async def test_delete_account_erases_every_table_in_one_transaction(
+    uow: SqlAlchemyUnitOfWork,
+    sessionmaker: async_sessionmaker[AsyncSession],
+    clock: FrozenClock,
+) -> None:
+    user_id = await _seed_account(uow, sessionmaker, clock, "7001", 701)
+
+    summary = await DeleteAccount(uow, clock).execute(user_id)
+
+    assert summary.transactions == 2
+    assert summary.parse_failures == 1
+    assert summary.inbox == 1
+    assert summary.rate_limits == 1
+    assert summary.users == 1
+
+    async with uow as u:
+        for table in ("transactions", "parse_failures", "rate_limits"):
+            remaining = (
+                await u.session.execute(
+                    text(f"SELECT COUNT(*) FROM {table} WHERE user_id = :uid"),
+                    {"uid": user_id},
+                )
+            ).scalar_one()
+            assert remaining == 0, table
+        assert await u.users.get_by_id(user_id) is None
+        assert (
+            await u.session.execute(text("SELECT COUNT(*) FROM inbox"))
+        ).scalar_one() == 0
+        # The audit row survives, carrying no one's identity.
+        assert await u.deletion_log.count_total() == 1
+        row = (
+            await u.session.execute(
+                text("SELECT platform, rows_deleted FROM deletion_log")
+            )
+        ).one()
+    assert row == ("telegram", summary.total)
+
+
+async def test_delete_account_leaves_other_users_intact(
+    uow: SqlAlchemyUnitOfWork,
+    sessionmaker: async_sessionmaker[AsyncSession],
+    clock: FrozenClock,
+) -> None:
+    """G5/US-12 isolation on the one path that hard-deletes. The inbox case is
+    the sharp one: rows are matched by the sender id *inside* the JSON
+    payload, and a sloppy `LIKE` would take the bystander's updates too."""
+    victim = await _seed_account(uow, sessionmaker, clock, "7001", 701)
+    bystander = await _seed_account(uow, sessionmaker, clock, "7002", 702)
+
+    await DeleteAccount(uow, clock).execute(victim)
+
+    async with uow as u:
+        assert await u.users.get_by_id(bystander) is not None
+        assert await u.transactions.count_for_user(bystander) == 2
+        assert (
+            await u.session.execute(
+                text("SELECT COUNT(*) FROM parse_failures WHERE user_id = :uid"),
+                {"uid": bystander},
+            )
+        ).scalar_one() == 1
+        assert (
+            await u.session.execute(
+                text("SELECT COUNT(*) FROM rate_limits WHERE user_id = :uid"),
+                {"uid": bystander},
+            )
+        ).scalar_one() == 1
+        assert (
+            await u.session.execute(text("SELECT update_id FROM inbox"))
+        ).scalars().all() == [702]

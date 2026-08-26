@@ -35,3 +35,10 @@ class SqlAlchemyParseFailureRepository:
         stmt = delete(ParseFailureRow).where(ParseFailureRow.created_at < before_at)
         result = cast(CursorResult, await self._session.execute(stmt))
         return result.rowcount
+
+    async def purge_user(self, user_id: int) -> int:
+        """Hard-delete this user's parse failures, including their `raw_text`
+        (verbatim chat the parser could not read) — `/hapusakun` (G5/US-12)."""
+        stmt = delete(ParseFailureRow).where(ParseFailureRow.user_id == user_id)
+        result = cast(CursorResult, await self._session.execute(stmt))
+        return result.rowcount

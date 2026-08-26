@@ -13,6 +13,8 @@ from __future__ import annotations
 from types import TracebackType
 from typing import Self, cast
 
+import orjson
+
 from catetin.domain.errors import DomainValidationError
 from catetin.domain.models import (
     DayTotal,
@@ -24,6 +26,24 @@ from catetin.domain.models import (
     User,
 )
 from catetin.domain.ports.clock import ClockPort
+
+
+def _payload_sender_id(payload: bytes) -> str | None:
+    """Telegram user id inside a stored update, mirroring the real inbox
+    repository's payload sniffing."""
+    try:
+        update = orjson.loads(payload)
+    except orjson.JSONDecodeError:
+        return None
+    if not isinstance(update, dict):
+        return None
+    for key in ("message", "edited_message", "callback_query"):
+        envelope = update.get(key)
+        if isinstance(envelope, dict):
+            sender = envelope.get("from")
+            if isinstance(sender, dict) and sender.get("id") is not None:
+                return str(sender["id"])
+    return None
 
 
 class FakeUserRepository:
@@ -86,6 +106,9 @@ class FakeUserRepository:
         )
         self._users[user_id] = updated
         return updated
+
+    async def hard_delete(self, user_id: int) -> int:
+        return 1 if self._users.pop(user_id, None) is not None else 0
 
     async def count_total(self) -> int:
         return len(self._users)
@@ -233,6 +256,17 @@ class FakeTransactionRepository:
         ]
         return sorted(rows, key=lambda t: t.occurred_at)
 
+    async def count_for_user(self, user_id: int) -> int:
+        return sum(1 for t in self._rows if t.user_id == user_id)
+
+    async def purge_user(self, user_id: int) -> int:
+        # `self._rows`, not `self._live(...)` — mirrors the real repository's
+        # Core delete, which erases soft-deleted rows too.
+        doomed = [t for t in self._rows if t.user_id == user_id]
+        for t in doomed:
+            self._rows.remove(t)
+        return len(doomed)
+
     async def count_by_occurred_on(self, occurred_on: str) -> int:
         return sum(
             1
@@ -280,6 +314,18 @@ class FakeInboxRepository:
             del self._rows[update_id]
         return len(stale)
 
+    async def purge_user(self, user_id: int, platform_user_id: str) -> int:
+        # Same shape as the real repository: `inbox` has no `user_id` column,
+        # so ownership is read out of the stored webhook payload.
+        doomed = [
+            update_id
+            for update_id, (payload, _) in self._rows.items()
+            if _payload_sender_id(payload) == platform_user_id
+        ]
+        for update_id in doomed:
+            del self._rows[update_id]
+        return len(doomed)
+
 
 class FakeParseFailureRepository:
     def __init__(self, clock: ClockPort, rows: list[ParseFailure]) -> None:
@@ -312,6 +358,36 @@ class FakeParseFailureRepository:
             self._rows.remove(f)
         return len(stale)
 
+    async def purge_user(self, user_id: int) -> int:
+        doomed = [f for f in self._rows if f.user_id == user_id]
+        for f in doomed:
+            self._rows.remove(f)
+        return len(doomed)
+
+
+class FakeRateLimitRepository:
+    """The purge-only `rate_limits` view on the UnitOfWork (not the limiter)."""
+
+    def __init__(self, rows: dict[tuple[int, str], int]) -> None:
+        self._rows = rows
+
+    async def purge_user(self, user_id: int) -> int:
+        doomed = [key for key in self._rows if key[0] == user_id]
+        for key in doomed:
+            del self._rows[key]
+        return len(doomed)
+
+
+class FakeDeletionLogRepository:
+    def __init__(self, rows: list[tuple[str, int, int]]) -> None:
+        self._rows = rows
+
+    async def add(self, platform: str, rows_deleted: int, deleted_at: int) -> None:
+        self._rows.append((platform, rows_deleted, deleted_at))
+
+    async def count_total(self) -> int:
+        return len(self._rows)
+
 
 class FakeUnitOfWork:
     """Every `async with` re-enters against the same shared store, so calling
@@ -326,12 +402,18 @@ class FakeUnitOfWork:
         self._transactions: list[Transaction] = []
         self._inbox: dict[int, tuple[bytes, int | None]] = {}
         self._parse_failures: list[ParseFailure] = []
+        # (user_id, action) -> count, mirroring the real table's composite PK.
+        self._rate_limits: dict[tuple[int, str], int] = {}
+        # (platform, rows_deleted, deleted_at) — no user id, like the real table.
+        self._deletion_log: list[tuple[str, int, int]] = []
 
     async def __aenter__(self) -> Self:
         self.users = FakeUserRepository(self._clock, self._users)
         self.transactions = FakeTransactionRepository(self._clock, self._transactions)
         self.inbox = FakeInboxRepository(self._clock, self._inbox)
         self.parse_failures = FakeParseFailureRepository(self._clock, self._parse_failures)
+        self.rate_limits = FakeRateLimitRepository(self._rate_limits)
+        self.deletion_log = FakeDeletionLogRepository(self._deletion_log)
         return self
 
     async def __aexit__(

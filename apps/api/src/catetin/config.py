@@ -13,7 +13,7 @@ class Settings(BaseSettings):
     database_url: str = "sqlite+aiosqlite:///./catetin.db"
     db_reader_pool_size: int = 3
     redis_url: str | None = None
-    expected_db_revision: str = "0003_onboarding"
+    expected_db_revision: str = "0004_deletion_log"
     log_level: str = "INFO"
     body_max_bytes: int = 256_000
 

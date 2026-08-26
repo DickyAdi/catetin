@@ -1,4 +1,7 @@
-from sqlalchemy import func, select
+from typing import Any, cast
+
+from sqlalchemy import delete, func, select
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from catetin.domain.errors import NotFound
@@ -76,6 +79,18 @@ class SqlAlchemyUserRepository:
         row.blocked_at = int(self._clock.now().timestamp())
         await self._session.flush()
         return user_to_domain(row)
+
+    async def hard_delete(self, user_id: int) -> int:
+        """Drop the `users` row itself — the last step of `/hapusakun`.
+
+        Core `delete()` rather than `session.delete(row)`: there is no ORM
+        cascade to run (the child tables are purged explicitly, in order, by
+        `DeleteAccount`), and a bulk delete keeps the whole purge to one
+        statement per table.
+        """
+        stmt = delete(UserRow).where(UserRow.id == user_id)
+        result = await self._session.execute(stmt)
+        return cast("int", cast(CursorResult[Any], result).rowcount)
 
     async def count_total(self) -> int:
         stmt = select(func.count()).select_from(UserRow)
