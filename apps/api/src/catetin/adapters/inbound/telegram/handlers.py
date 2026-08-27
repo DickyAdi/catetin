@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from datetime import date, timedelta
 from typing import Literal
 
+from catetin.adapters.outbound.parsing.segmenter import MAX_SEGMENTS
 from catetin.adapters.outbound.reporting.text_renderer import (
     render_day_totals,
     render_text,
@@ -650,6 +651,17 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     result = await deps.record_transactions.execute(user.id, cmd.text, today)
 
     lines: list[str] = []
+
+    # The truncation notice leads the message rather than trailing it. A
+    # message that hit the segment cap is by definition long, so its reply is
+    # long too — and a footnote under 20 confirmation lines is a footnote the
+    # user scrolls past (or that `chunk_text` splits into a second bubble).
+    if any(issue.reason == "too_many_segments" for issue in result.issues):
+        lines.append(
+            f"Pesannya kepanjangan, cuma {MAX_SEGMENTS} transaksi pertama yang diproses."
+        )
+        lines.append("")
+
     if result.recorded:
         lines.append(f"Tercatat {len(result.recorded)} transaksi:")
         for tx in result.recorded:
@@ -673,18 +685,28 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             )
 
     for issue in result.issues:
+        if issue.reason == "too_many_segments":
+            continue  # already said, at the top, where it can be seen
+        if issue.reason == "ambiguous_kind":
+            # US-08: an ambiguous segment is not an error, it is a question —
+            # the Jual/Beli/Bukan Usaha keyboard below is the whole reply.
+            # It used to fall through to the catch-all and surface the raw
+            # reason code, which both read as a failure and buried everything
+            # else in the message when a batch was full of them.
+            continue
         if issue.reason == "no_amount":
             lines.append(
                 f'Nggak ketemu nominalnya di "{issue.raw_text}" '
                 '— coba tulis mis. "jual ayam 50rb".'
             )
-        elif issue.reason == "too_many_segments":
-            lines.append("Pesannya kepanjangan, cuma 20 transaksi pertama yang diproses.")
         else:
             lines.append(f'Nggak bisa diproses: "{issue.raw_text}" ({issue.reason}).')
 
-    if lines:
-        await deps.messaging.send_text(user.id, "\n".join(lines))
+    # `.strip()` because the blank spacer lines are written unconditionally —
+    # a reply that is only the truncation notice must not trail one.
+    reply = "\n".join(lines).strip()
+    if reply:
+        await deps.messaging.send_text(user.id, reply)
 
     if result.ambiguous:
         deps.pending_choices.setdefault(user.id, []).extend(result.ambiguous)
