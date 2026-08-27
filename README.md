@@ -34,7 +34,7 @@ make dev-bot                    # bot polling mode — test langsung dari HP Tel
 make dev-api                    # backend API (FastAPI :8000, reload)
 make dev-fe                     # frontend marketing (Vite :5173)
 # 4. Test & quality
-make test                       # backend test suite (302 tests)
+make test                       # backend test suite (unit + integration + webhook)
 make lint && make typecheck     # ruff + mypy
 ```
 
@@ -106,7 +106,7 @@ catetin/
 │   │   │   ├── application/     # use cases (record, summarize, report, delete_account, ...)
 │   │   │   └── adapters/        # inbound (telegram, http, scheduler) + outbound (persistence, parsing, reporting, backup, observability)
 │   │   ├── alembic/             # migrations 0001..0004
-│   │   └── tests/               # 302 tests (unit, integration, webhook)
+│   │   └── tests/               # unit, integration, webhook tests
 │   └── web/              # marketing site — Vite + React 19 + Tailwind v4
 ├── infrastructure/      # observability: deployment/ (Grafana Cloud) + development/ (local Loki)
 ├── packages/assets/     # brand assets (logo SVG, font)
