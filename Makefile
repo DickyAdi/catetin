@@ -8,7 +8,7 @@ ALLOY_UI := http://127.0.0.1:12345
 
 .DEFAULT_GOAL := help
 
-.PHONY: help setup dev dev-api dev-fe dev-all dev-down dev-bot test lint typecheck migrate migrate-new db-reset \
+.PHONY: help setup dev dev-api dev-fe dev-all dev-down dev-bot bot-commands test lint typecheck migrate migrate-new db-reset \
 	dockerized docker-up docker-down clean status deploy \
 	infra-up infra-down infra-logs infra-ps infra-dev-up infra-dev-down obs-check
 
@@ -37,6 +37,9 @@ dev-fe: ## Run the frontend (Vite) dev server (apps/web)
 
 dev-bot: ## Run the Telegram bot in polling mode for local testing (no webhook/tunnel needed)
 	cd $(APP_DIR) && uv run python scripts/dev_polling.py
+
+bot-commands: ## Sync Telegram bot slash-commands (setMyCommands) — run after adding/renaming commands
+	cd $(APP_DIR) && uv run python scripts/set_bot_commands.py
 
 dev-all: ## Start backend + frontend dev servers in background (tracked via .dev/*.pid; stop with `make dev-down`)
 	@mkdir -p .dev
