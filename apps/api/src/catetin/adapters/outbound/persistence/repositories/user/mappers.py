@@ -20,6 +20,7 @@ def user_to_domain(row: UserRow) -> User:
         business_name=row.business_name,
         timezone=row.timezone,
         digest_enabled=bool(row.digest_enabled),
+        has_onboarded=bool(row.has_onboarded),
         blocked_at=row.blocked_at,
         created_at=row.created_at,
         updated_at=row.updated_at,

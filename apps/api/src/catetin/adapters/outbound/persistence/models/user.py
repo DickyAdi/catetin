@@ -21,6 +21,9 @@ class UserRow(Base):
     digest_enabled: Mapped[int] = mapped_column(
         Integer, nullable=False, server_default=text("1")
     )
+    has_onboarded: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default=text("0")
+    )
     blocked_at: Mapped[int | None] = mapped_column(Integer)
     created_at: Mapped[int] = mapped_column(
         Integer, nullable=False, server_default=text("(unixepoch())")
@@ -32,6 +35,7 @@ class UserRow(Base):
     __table_args__ = (
         CheckConstraint("platform IN ('telegram','whatsapp')", name="platform_known"),
         CheckConstraint("digest_enabled IN (0,1)", name="digest_bool"),
+        CheckConstraint("has_onboarded IN (0,1)", name="onboarded_bool"),
         Index("idx_users_platform_uid", "platform", "platform_user_id", unique=True),
         Index(
             "idx_users_digest",

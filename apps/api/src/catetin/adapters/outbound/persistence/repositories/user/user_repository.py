@@ -53,6 +53,22 @@ class SqlAlchemyUserRepository:
         await self._session.flush()
         return user_to_domain(row)
 
+    async def set_business_name(self, user_id: int, name: str) -> User:
+        row = await self._session.get(UserRow, user_id)
+        if row is None:
+            raise NotFound(f"user {user_id} not found")
+        row.business_name = name
+        await self._session.flush()
+        return user_to_domain(row)
+
+    async def set_onboarded(self, user_id: int) -> User:
+        row = await self._session.get(UserRow, user_id)
+        if row is None:
+            raise NotFound(f"user {user_id} not found")
+        row.has_onboarded = 1
+        await self._session.flush()
+        return user_to_domain(row)
+
     async def mark_blocked(self, user_id: int) -> User:
         row = await self._session.get(UserRow, user_id)
         if row is None:
