@@ -35,6 +35,13 @@ from catetin.domain.ports.messaging import MessagingPort
 from telegram import Update
 from telegram.ext import ContextTypes
 
+from .list_view import (
+    LIST_CLOSE,
+    LIST_NOOP,
+    LIST_PREFIX,
+    page_buttons,
+    render_page,
+)
 from .mapper import InboundCommand, map_update
 
 _logger = logging.getLogger("catetin.telegram.handlers")
@@ -116,6 +123,13 @@ class OnboardingState:
 # Losing the dict on restart fails closed — the tap reads as expired and the
 # user types `/hapusakun` again, which is the right side to err on for a
 # button whose job is to destroy data.
+# `/list` pagination. The payload is the offset itself and there is no
+# per-user page state — see `list_view` for why, and for the 4096-character
+# ceiling a page is rendered under.
+LIST_EMPTY = "Belum ada transaksi."
+LIST_CLOSED = "Oke, ditutup. Ketik /list lagi kapan aja."
+LIST_UNKNOWN_BUTTON = "Tombol nggak dikenal, ketik /list lagi ya."
+
 DELETE_PREFIX = "hapus:"
 DELETE_DOWNLOAD_PREFIX = "hapus-unduh:"
 DELETE_CANCEL = "batal-hapus"
@@ -271,17 +285,48 @@ async def on_list(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if cmd is None:
         return
     user = await _get_user(deps, cmd)
-    transactions = await deps.manage_transactions.list_recent(user.id)
-    if not transactions:
-        await deps.messaging.send_text(user.id, "Belum ada transaksi.")
+    await _send_list_page(deps, user, 0)
+
+
+async def _send_list_page(deps: TelegramDeps, user: User, offset: int) -> None:
+    page = await deps.manage_transactions.list_page(user.id, offset)
+    if not page.items:
+        await deps.messaging.send_text(user.id, LIST_EMPTY)
         return
-    lines = ["📋 10 Transaksi Terakhir"]
-    for i, tx in enumerate(transactions, start=1):
-        marker = "+" if tx.kind == "sale" else "-"
-        amount = f"{marker}Rp {tx.total_amount:,}".replace(",", ".")
-        prefix = "🚫 " if tx.excluded_from_report else ""
-        lines.append(f"{i}. {prefix}[{tx.id}] {amount} {tx.item} ({tx.occurred_on})")
-    await deps.messaging.send_text(user.id, "\n".join(lines))
+    text = render_page(page)
+    buttons = page_buttons(page)
+    if not buttons:
+        # Everything fits on one page: send it as text, which also keeps the
+        # single-page `/list` byte-for-byte what it was before pagination.
+        await deps.messaging.send_text(user.id, text)
+        return
+    await deps.messaging.ask_action(user.id, text, buttons)
+
+
+async def _handle_list_callback(deps: TelegramDeps, update: Update, data: str) -> None:
+    if update.effective_user is None:
+        return
+
+    if data == LIST_NOOP:
+        # The page indicator is a label; Telegram just needs it to carry data.
+        # `on_callback` has already answered the query, so the tap is a no-op
+        # without even resolving the user.
+        return
+
+    user = await deps.onboarding.get_or_create_user(
+        "telegram", str(update.effective_user.id), update.effective_user.full_name
+    )
+    if data == LIST_CLOSE:
+        await deps.messaging.send_text(user.id, LIST_CLOSED)
+        return
+
+    try:
+        offset = int(data.removeprefix(LIST_PREFIX))
+    except ValueError:
+        # A payload we never sent, or one from a scheme we no longer use.
+        await deps.messaging.send_text(user.id, LIST_UNKNOWN_BUTTON)
+        return
+    await _send_list_page(deps, user, offset)
 
 
 async def on_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -721,6 +766,11 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
     if data.startswith((REVIEW_EXCLUDE_PREFIX, REVIEW_KEEP_PREFIX)):
         await _handle_review_callback(deps, update, data)
+        return
+
+    if data.startswith(LIST_PREFIX):
+        # One branch covers `list:{offset}`, `list:noop` and `list:tutup`.
+        await _handle_list_callback(deps, update, data)
         return
 
     if data.startswith(OB_PREFIX):
