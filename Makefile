@@ -8,7 +8,7 @@ ALLOY_UI := http://127.0.0.1:12345
 
 .DEFAULT_GOAL := help
 
-.PHONY: help setup dev dev-api dev-fe dev-all dev-down dev-bot test lint typecheck migrate migrate-new \
+.PHONY: help setup dev dev-api dev-fe dev-all dev-down dev-bot test lint typecheck migrate migrate-new db-reset \
 	dockerized docker-up docker-down clean status deploy \
 	infra-up infra-down infra-logs infra-ps infra-dev-up infra-dev-down obs-check
 
@@ -86,6 +86,11 @@ migrate: ## Apply Alembic migrations to the configured database
 
 migrate-new: ## Generate a new Alembic revision: make migrate-new msg="add column"
 	cd $(APP_DIR) && uv run alembic revision --autogenerate -m "$(msg)"
+
+db-reset: ## Drop the dev SQLite DB (incl. WAL/SHM) and re-migrate to head — destroys all data
+	@rm -f $(APP_DIR)/catetin.db $(APP_DIR)/catetin.db-wal $(APP_DIR)/catetin.db-shm
+	@cd $(APP_DIR) && uv run alembic upgrade head
+	@echo "DB reset + migrated to head"
 
 dockerized: ## Build and run the backend via Docker Compose
 	docker compose up -d --build
