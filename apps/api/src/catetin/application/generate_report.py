@@ -23,6 +23,8 @@ from ..domain.ports.reporting import ReportRendererPort
 from ..domain.ports.repositories import RateLimiterPort, UnitOfWork
 
 PDF_BUCKET = "pdf"
+# Only reachable when the user row vanished mid-render; matches `User.timezone`.
+DEFAULT_TIMEZONE = "Asia/Jakarta"
 RATE_LIMIT_WINDOW_SECONDS = 3600
 DEFAULT_MAX_PER_HOUR = 5
 TOP_ITEMS_LIMIT = 5
@@ -129,6 +131,9 @@ class GenerateReport:
                 )
 
             business_name = user.business_name if user else None
+            # The renderer prints clock times off `occurred_at`, a UTC epoch,
+            # so it needs the zone `occurred_on` was already denormalized to.
+            timezone = user.timezone if user else DEFAULT_TIMEZONE
             pdf_bytes = await self._renderer.render_pdf(
                 user_id,
                 summary,
@@ -138,6 +143,7 @@ class GenerateReport:
                 transactions,
                 business_name,
                 period_label,
+                timezone,
             )
         except Exception as exc:
             # PDF rendering is the most failure-prone thing this app does

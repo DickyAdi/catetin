@@ -271,6 +271,23 @@ async def test_generate_report_passes_business_name_period_label_and_top_items(
     assert renderer.last_item_totals[0].item == "Ayam Geprek"
 
 
+async def test_generate_report_passes_the_users_timezone_to_the_renderer(
+    uow: FakeUnitOfWork,
+) -> None:
+    """The renderer prints clock times off `occurred_at`, a UTC epoch, so the
+    zone has to travel with the data or the PDF reads in UTC (QA round 2)."""
+    user_id = await _create_user(uow, "4003")
+    async with uow as u:
+        await u.users.set_timezone(user_id, "Asia/Jayapura")
+        await u.commit()
+    renderer = FakeReportRenderer()
+    use_case = GenerateReport(uow, FakeRateLimiter(), renderer)
+
+    await use_case.execute(user_id, TODAY, TODAY)
+
+    assert renderer.last_timezone == "Asia/Jayapura"
+
+
 # --- Onboarding -------------------------------------------------------------
 
 

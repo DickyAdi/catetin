@@ -22,7 +22,8 @@ keeps a core free for the event loop (Async & Resource Design §4/§6).
 from __future__ import annotations
 
 import asyncio
-from datetime import UTC, datetime
+from datetime import UTC, datetime, tzinfo
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fpdf import FPDF
 
@@ -53,8 +54,23 @@ def _truncate(text: str, limit: int = _MAX_ITEM_NAME_LEN) -> str:
     return text if len(text) <= limit else text[: limit - 3] + "..."
 
 
-def _short_time(occurred_at: int) -> str:
-    return datetime.fromtimestamp(occurred_at, UTC).strftime("%H:%M")
+def _zone(timezone: str) -> tzinfo:
+    """The user's zone, or UTC if it is somehow unknown to this host.
+
+    Timezones are validated before they are stored, so the fallback only ever
+    fires on a tzdata mismatch — and a report with a slightly-off clock column
+    beats no report at all.
+    """
+    try:
+        return ZoneInfo(timezone)
+    except (ZoneInfoNotFoundError, ValueError):
+        return UTC
+
+
+def _short_time(occurred_at: int, zone: tzinfo) -> str:
+    """`occurred_at` is a UTC epoch; the user thinks in their own wall clock,
+    the same one `occurred_on` is already denormalized to."""
+    return datetime.fromtimestamp(occurred_at, zone).strftime("%H:%M")
 
 
 def _section_title(pdf: FPDF, title: str) -> None:
@@ -82,7 +98,7 @@ def _item_table(pdf: FPDF, title: str, items: list[ItemTotal]) -> None:
 
 
 def _render_page1_ringkasan(
-    pdf: FPDF, summary: Summary, business_name: str | None, period_label: str
+    pdf: FPDF, summary: Summary, business_name: str | None, period_label: str, zone: tzinfo
 ) -> None:
     pdf.add_page()
     pdf.set_font(_FONT, style="B", size=16)
@@ -92,7 +108,9 @@ def _render_page1_ringkasan(
     if business_name:
         pdf.cell(0, 6, business_name, new_x="LMARGIN", new_y="NEXT")
     pdf.cell(0, 6, period_label, new_x="LMARGIN", new_y="NEXT")
-    generated_at = datetime.now(UTC).strftime("%d-%m-%Y %H:%M UTC")
+    # `%Z` prints the zone's own abbreviation, which for the three Indonesian
+    # zones is exactly what users call them: WIB / WITA / WIT.
+    generated_at = datetime.now(zone).strftime("%d-%m-%Y %H:%M %Z")
     pdf.set_font(_FONT, style="I", size=9)
     pdf.cell(0, 5, f"Dibuat pada {generated_at}", new_x="LMARGIN", new_y="NEXT")
     pdf.ln(6)
@@ -161,7 +179,7 @@ def _render_page2_rincian(
 
 
 def _render_page3_laporan_keuangan(
-    pdf: FPDF, summary: Summary, transactions: list[Transaction]
+    pdf: FPDF, summary: Summary, transactions: list[Transaction], zone: tzinfo
 ) -> None:
     pdf.add_page()
     _section_title(pdf, "Laporan Keuangan")
@@ -194,7 +212,7 @@ def _render_page3_laporan_keuangan(
         for tx in transactions:
             status = "Batal" if tx.deleted_at is not None else "Aktif"
             pdf.cell(_DETAIL_COL_WIDTHS[0], 6, tx.occurred_on, border=1)
-            pdf.cell(_DETAIL_COL_WIDTHS[1], 6, _short_time(tx.occurred_at), border=1)
+            pdf.cell(_DETAIL_COL_WIDTHS[1], 6, _short_time(tx.occurred_at, zone), border=1)
             pdf.cell(_DETAIL_COL_WIDTHS[2], 6, _truncate(tx.item, 34), border=1)
             pdf.cell(_DETAIL_COL_WIDTHS[3], 6, _KIND_LABEL[tx.kind], border=1)
             pdf.cell(_DETAIL_COL_WIDTHS[4], 6, _rupiah(tx.total_amount), border=1)
@@ -217,14 +235,16 @@ def _build_pdf(
     transactions: list[Transaction],
     business_name: str | None,
     period_label: str,
+    timezone: str,
 ) -> bytes:
+    zone = _zone(timezone)
     pdf = FPDF(orientation="P", unit="mm", format="A4")
     pdf.set_margins(15, 15, 15)
     pdf.set_auto_page_break(auto=True, margin=15)
 
-    _render_page1_ringkasan(pdf, summary, business_name, period_label)
+    _render_page1_ringkasan(pdf, summary, business_name, period_label, zone)
     _render_page2_rincian(pdf, day_totals, sale_item_totals, expense_item_totals)
-    _render_page3_laporan_keuangan(pdf, summary, transactions)
+    _render_page3_laporan_keuangan(pdf, summary, transactions, zone)
 
     pdf.set_font(_FONT, style="I", size=8)
     pdf.set_y(-20)
@@ -252,6 +272,7 @@ class PdfRenderer:
         transactions: list[Transaction],
         business_name: str | None,
         period_label: str,
+        timezone: str,
     ) -> bytes:
         async with self._semaphore:
             return await asyncio.to_thread(
@@ -263,4 +284,5 @@ class PdfRenderer:
                 transactions,
                 business_name,
                 period_label,
+                timezone,
             )
