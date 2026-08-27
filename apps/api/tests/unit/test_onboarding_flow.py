@@ -119,6 +119,7 @@ def deps(
         manage_transactions=unused,
         summarize=unused,
         generate_report=cast(Any, reporter),
+        delete_account=unused,
         messaging=messaging,
         clock=clock,
         default_timezone="Asia/Jakarta",

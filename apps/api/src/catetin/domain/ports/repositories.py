@@ -33,6 +33,8 @@ class UserRepository(Protocol):
 
     async def mark_blocked(self, user_id: int) -> User: ...
 
+    async def hard_delete(self, user_id: int) -> int: ...  # `/hapusakun`; returns rows deleted
+
     async def count_total(self) -> int: ...  # instance-wide, for ops stats
 
     async def list_digest_enabled(self) -> list[User]: ...  # instance-wide, for the nightly digest
@@ -73,6 +75,10 @@ class TransactionRepository(Protocol):
         self, user_id: int, start_date: str, end_date: str
     ) -> list[Transaction]: ...  # excluded=0, includes soft-deleted — PDF audit trail (FR-5)
 
+    async def count_for_user(self, user_id: int) -> int: ...  # every row, soft-deleted included
+
+    async def purge_user(self, user_id: int) -> int: ...  # hard delete; returns rows deleted
+
     # instance-wide (all users), for ops stats
     async def count_by_occurred_on(self, occurred_on: str) -> int: ...
 
@@ -90,6 +96,10 @@ class InboxRepository(Protocol):
 
     async def delete_processed_older_than(self, before_at: int) -> int: ...  # returns rows deleted
 
+    # `platform_user_id` as well as `user_id`: inbox rows are keyed by
+    # Telegram's `update_id` and carry the sender only inside their payload.
+    async def purge_user(self, user_id: int, platform_user_id: str) -> int: ...
+
 
 class ParseFailureRepository(Protocol):
     async def add(self, user_id: int | None, raw_text: str, reason: str) -> ParseFailure: ...
@@ -99,6 +109,25 @@ class ParseFailureRepository(Protocol):
     async def count_since(self, since_at: int) -> int: ...  # for ops stats
 
     async def delete_older_than(self, before_at: int) -> int: ...  # returns rows deleted
+
+    async def purge_user(self, user_id: int) -> int: ...  # hard delete; returns rows deleted
+
+
+class RateLimitRepository(Protocol):
+    """Purge-only view of `rate_limits`, on the UnitOfWork's session.
+
+    Distinct from `RateLimiterPort`: that one answers "may this call
+    proceed?" and commits on its own; this one exists so `/hapusakun` can
+    erase the counters inside the same transaction as everything else.
+    """
+
+    async def purge_user(self, user_id: int) -> int: ...
+
+
+class DeletionLogRepository(Protocol):
+    async def add(self, platform: str, rows_deleted: int, deleted_at: int) -> None: ...
+
+    async def count_total(self) -> int: ...
 
 
 class RateLimiterPort(Protocol):
@@ -112,6 +141,8 @@ class UnitOfWork(Protocol):
     transactions: TransactionRepository
     inbox: InboxRepository
     parse_failures: ParseFailureRepository
+    rate_limits: RateLimitRepository
+    deletion_log: DeletionLogRepository
 
     async def __aenter__(self) -> Self: ...
 

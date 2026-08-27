@@ -37,6 +37,7 @@ UNREFLECTED_INLINE_CHECKS = {
 }
 
 EXPECTED_TABLES = {
+    "deletion_log",
     "users",
     "transactions",
     "inbox",
@@ -135,6 +136,27 @@ def test_has_onboarded_column_exists_and_defaults_to_false(
             "INSERT INTO users (platform, platform_user_id) VALUES ('telegram', '1')"
         )
         assert conn.execute("SELECT has_onboarded FROM users").fetchone()[0] == 0
+    finally:
+        conn.close()
+
+
+def test_deletion_log_carries_no_identifying_columns(
+    database_url: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """0004: the erasure audit trail proves a purge happened without keeping
+    the person it happened for, so a `user_id`/`platform_user_id`/name column
+    appearing here later is the bug this test exists to catch."""
+    command.upgrade(_cfg(database_url, monkeypatch), "head")
+
+    conn = sqlite3.connect(_sqlite_path(database_url))
+    try:
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(deletion_log)")}
+        assert columns == {"id", "deleted_at", "platform", "rows_deleted"}
+
+        sql = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE name='deletion_log'"
+        ).fetchone()[0]
+        assert "AUTOINCREMENT" in sql.upper(), sql
     finally:
         conn.close()
 

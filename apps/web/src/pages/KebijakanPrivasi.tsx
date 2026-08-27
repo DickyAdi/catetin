@@ -20,7 +20,7 @@ const SECTIONS = [
   },
   {
     title: "Hak Kamu Sesuai UU PDP",
-    body: "Kamu berhak minta lihat, ubah, atau hapus semua catatanmu kapan saja. Cukup chat tim kami untuk minta ini.",
+    body: "Kamu berhak minta lihat, ubah, atau hapus semua catatanmu kapan saja. Untuk hapus, ketik /hapusakun di bot: semua catatanmu langsung dihapus permanen, tanpa perlu tunggu balasan tim kami.",
   },
   {
     title: "Kontak",

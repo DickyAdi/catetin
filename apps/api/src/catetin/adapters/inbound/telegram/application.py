@@ -39,6 +39,7 @@ def build_application(settings: Settings, polling: bool = False) -> Application:
     application.add_handler(CommandHandler("lapor", handlers.on_report))
     application.add_handler(CommandHandler("digest", handlers.on_digest))
     application.add_handler(CommandHandler("zona", handlers.on_timezone))
+    application.add_handler(CommandHandler("hapusakun", handlers.on_delete_account))
     application.add_handler(CallbackQueryHandler(handlers.on_callback))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.on_text))
     application.add_handler(

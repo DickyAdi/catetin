@@ -14,6 +14,7 @@ dependencies = [
     "fpdf2",
     "pydantic",
     "pydantic-settings",
+    "pyrage>=1.4.0",
 ]
 
 [dependency-groups]

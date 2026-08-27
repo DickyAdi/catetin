@@ -80,12 +80,18 @@ class RecordTransactions:
         # collector must not hold the writer connection (pool_size=1) open.
         if self._obs is not None and issues:
             for issue in issues:
+                # `segment_len`, never the segment itself: `raw_text` is
+                # verbatim chat ("jual ayam 50rb", but also whatever else the
+                # user typed), and shipping it to Grafana Cloud would put
+                # personal data in a third-party system that no `/hapusakun`
+                # of ours can reach. The length is what the debugging question
+                # ("did the parser choke on something long?") actually needs.
                 await self._obs.log_event(
                     "warning",
                     "parse_failed",
                     user_id=user_id,
                     reason=issue.reason,
-                    segment=issue.raw_text,
+                    segment_len=len(issue.raw_text),
                 )
             await self._obs.record_metric(
                 "parse_failure_total", float(len(issues)), {"source": "record_transactions"}

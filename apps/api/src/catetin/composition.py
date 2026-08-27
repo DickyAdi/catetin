@@ -36,6 +36,7 @@ from .adapters.outbound.persistence.uow import SqlAlchemyUnitOfWork
 from .adapters.outbound.reporting.pdf_renderer import PdfRenderer
 from .adapters.outbound.system_clock import SystemClock
 from .adapters.outbound.telegram.sender import TelegramSender
+from .application.delete_account import DeleteAccount
 from .application.generate_report import GenerateReport
 from .application.manage_transactions import ManageTransactions
 from .application.onboarding import Onboarding
@@ -71,6 +72,7 @@ class Dependencies:
     manage_transactions: ManageTransactions
     summarize: Summarize
     generate_report: GenerateReport
+    delete_account: DeleteAccount
     messaging: MessagingPort
     telegram_application: TelegramApplication
     observability: ObservabilityPort
@@ -156,6 +158,7 @@ def wire(
         max_per_user_hour=settings.pdf_max_per_user_hour,
         observability=observability,
     )
+    delete_account = DeleteAccount(uow, clock)
 
     # The inbound Application and the outbound sender share one PTB Bot
     # instance (`application.bot`) — no second token, no second connection
@@ -168,6 +171,7 @@ def wire(
         manage_transactions=manage_transactions,
         summarize=summarize,
         generate_report=generate_report,
+        delete_account=delete_account,
         messaging=messaging,
         clock=clock,
         default_timezone=settings.timezone,
@@ -185,6 +189,7 @@ def wire(
         manage_transactions=manage_transactions,
         summarize=summarize,
         generate_report=generate_report,
+        delete_account=delete_account,
         messaging=messaging,
         telegram_application=application,
         observability=observability,

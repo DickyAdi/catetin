@@ -1,6 +1,6 @@
 from typing import Any, cast
 
-from sqlalchemy import case, desc, func, insert, select, update
+from sqlalchemy import Table, case, delete, desc, func, insert, select, update
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -20,6 +20,12 @@ from .mappers import (
     transaction_to_domain,
     transaction_values_from_parsed,
 )
+
+# The raw `Table` behind the mapped entity, for the handful of queries that
+# must bypass the session-wide soft-delete `with_loader_criteria`. Declarative
+# types `__table__` as the broader `FromClause`, which `delete()` will not
+# accept, so the narrowing happens once here rather than at each call site.
+_transactions = cast(Table, TransactionRow.__table__)
 
 
 class SqlAlchemyTransactionRepository:
@@ -213,7 +219,7 @@ class SqlAlchemyTransactionRepository:
         (shown with their own "Batal" status), so this deliberately selects
         the raw `Table` rather than the mapped entity to bypass the
         session-wide soft-delete `with_loader_criteria`."""
-        table = TransactionRow.__table__
+        table = _transactions
         stmt = (
             select(table)
             .where(
@@ -226,6 +232,28 @@ class SqlAlchemyTransactionRepository:
         )
         rows = (await self._session.execute(stmt)).all()
         return [transaction_from_core_row(row) for row in rows]
+
+    async def count_for_user(self, user_id: int) -> int:
+        """Every row this user owns, soft-deleted and excluded ones included:
+        the number `/hapusakun` promises to erase. Counts the raw `Table` so
+        the session-wide soft-delete criteria cannot hide `/batal`'d rows and
+        under-report what is about to go."""
+        table = _transactions
+        stmt = select(func.count()).select_from(table).where(table.c.user_id == user_id)
+        return (await self._session.execute(stmt)).scalar_one()
+
+    async def purge_user(self, user_id: int) -> int:
+        """Hard-delete every row this user owns, `raw_text` and all (G5/US-12).
+
+        Deliberately a Core `delete()` against the raw `Table`, not an ORM
+        select-then-delete: the session installs a `deleted_at IS NULL`
+        `with_loader_criteria` on selects, so an ORM round trip would skip
+        already-soft-deleted rows and orphan every `/batal`'d transaction
+        forever. Soft delete is not erasure; this is.
+        """
+        table = _transactions
+        result = await self._session.execute(delete(table).where(table.c.user_id == user_id))
+        return cast("int", cast(CursorResult[Any], result).rowcount)
 
     async def count_by_occurred_on(self, occurred_on: str) -> int:
         """Instance-wide (all users) count for ops stats — not user-scoped."""

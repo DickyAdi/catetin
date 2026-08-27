@@ -68,9 +68,13 @@ def test_fake_satisfies_the_port() -> None:
 # --- RecordTransactions ------------------------------------------------------
 
 
-async def test_parse_failures_are_logged_with_reason_and_segment(
+async def test_parse_failures_are_logged_with_reason_and_segment_length(
     uow: FakeUnitOfWork, obs: FakeObservability
 ) -> None:
+    """The failure reason and how long the segment was, never the segment.
+
+    Telemetry leaves for Grafana Cloud, and `/hapusakun` cannot reach a
+    third-party system — so verbatim chat text must not be in the payload."""
     user_id = await _create_user(uow)
     parser = FakeParser()
     parser.next_outcome = ParseOutcome(
@@ -87,8 +91,9 @@ async def test_parse_failures_are_logged_with_reason_and_segment(
     assert event.fields == {
         "user_id": user_id,
         "reason": "no_amount",
-        "segment": "laris manis hari ini",
+        "segment_len": 20,
     }
+    assert "laris manis hari ini" not in repr(event.fields)
 
 
 async def test_ambiguous_kind_is_logged_and_counted(

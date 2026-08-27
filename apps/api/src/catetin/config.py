@@ -13,7 +13,7 @@ class Settings(BaseSettings):
     database_url: str = "sqlite+aiosqlite:///./catetin.db"
     db_reader_pool_size: int = 3
     redis_url: str | None = None
-    expected_db_revision: str = "0003_onboarding"
+    expected_db_revision: str = "0004_deletion_log"
     log_level: str = "INFO"
     body_max_bytes: int = 256_000
 
@@ -33,6 +33,12 @@ class Settings(BaseSettings):
     digest_hour_local: int = 21
     backup_dir: str = "./backups"
     backup_keep_n: int = 7
+    # age recipient (public key, `age1...`) the nightly backup is encrypted to.
+    # A public key is safe to keep in .env and in config: it can only encrypt.
+    # The matching identity stays OFFLINE and never touches the VPS, so a host
+    # compromise yields backups nobody on that host can read. Unset (the
+    # default) skips encryption entirely, which keeps dev and tests hermetic.
+    backup_age_recipient: str | None = None
 
     # Observability — which ObservabilityPort adapter composition wires up.
     # "null" (default) keeps tests and local runs off the network entirely;

@@ -7,6 +7,7 @@ instances or `Row`s.
 """
 
 from .base import Base
+from .deletion_log import DeletionLogRow
 from .inbox import InboxRow
 from .parse_failure import ParseFailureRow
 from .rate_limit import RateLimitRow
@@ -15,6 +16,7 @@ from .user import UserRow
 
 __all__ = [
     "Base",
+    "DeletionLogRow",
     "InboxRow",
     "ParseFailureRow",
     "RateLimitRow",

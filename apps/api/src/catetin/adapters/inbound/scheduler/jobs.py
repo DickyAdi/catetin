@@ -16,6 +16,7 @@ from pathlib import Path
 
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from catetin.adapters.outbound.backup.encryption import encrypt_file, encrypted_name
 from catetin.adapters.outbound.reporting.text_renderer import render_text
 from catetin.domain.ports.clock import ClockPort
 from catetin.domain.ports.messaging import MessagingPort
@@ -75,6 +76,16 @@ def _vacuum_into(db_path: str, dest: Path) -> None:
         conn.close()
 
 
+def _is_free(candidate: Path) -> bool:
+    """Neither the plaintext name nor its `.age` form is taken.
+
+    Both are checked whatever this run will produce, so that flipping
+    `CATETIN_BACKUP_AGE_RECIPIENT` on or off never lets one run silently
+    clobber a previous run's artifact under the other naming.
+    """
+    return not candidate.exists() and not encrypted_name(candidate).exists()
+
+
 def _next_free_dest(backup_dir: Path, today: str, hhmmss: str) -> Path:
     """A path `VACUUM INTO` will accept — it refuses to overwrite.
 
@@ -83,31 +94,64 @@ def _next_free_dest(backup_dir: Path, today: str, hhmmss: str) -> Path:
     landing inside the same second.
     """
     dest = backup_dir / f"catetin-{today}-{hhmmss}.db"
-    if not dest.exists():
+    if _is_free(dest):
         return dest
     for n in itertools.count(2):
         candidate = backup_dir / f"catetin-{today}-{hhmmss}-{n}.db"
-        if not candidate.exists():
+        if _is_free(candidate):
             return candidate
     raise AssertionError("unreachable")  # pragma: no cover
 
 
 def _prune_old_backups(backup_dir: Path, keep_n: int) -> None:
-    backups = sorted(backup_dir.glob("catetin-*.db"))
+    # `catetin-*.db*` matches both the plaintext and the `.age` naming, so a
+    # host that has just been switched to encrypted backups still prunes the
+    # plaintext ones it made yesterday. The timestamp in the name dominates
+    # the sort, so oldest-first holds across both forms.
+    backups = sorted(backup_dir.glob("catetin-*.db*"))
     for stale in backups[:-keep_n] if len(backups) > keep_n else []:
         stale.unlink(missing_ok=True)
 
 
-def _do_backup(database_url: str, backup_dir: Path, today: str, keep_n: int) -> Path:
+def _do_backup(
+    database_url: str,
+    backup_dir: Path,
+    today: str,
+    keep_n: int,
+    age_recipient: str | None,
+) -> Path:
     backup_dir.mkdir(parents=True, exist_ok=True)
     dest = _next_free_dest(backup_dir, today, datetime.now(UTC).strftime("%H%M%S"))
     _vacuum_into(_sqlite_path(database_url), dest)
+
+    if age_recipient:
+        encrypted = encrypted_name(dest)
+        try:
+            encrypt_file(dest, encrypted, age_recipient)
+        except Exception:
+            # Never leave a readable copy of everyone's data behind because
+            # encryption failed. Drop the plaintext and let the scheduler's
+            # `_safe` log it: a missing backup is a visible problem, an
+            # unnoticed plaintext one is a quiet breach.
+            dest.unlink(missing_ok=True)
+            encrypted.unlink(missing_ok=True)
+            raise
+        # `VACUUM INTO` cannot write through a pipe, so the plaintext exists
+        # for the moment between these two lines. That window is the reason
+        # the backup directory should not be world-readable.
+        dest.unlink(missing_ok=True)
+        dest = encrypted
+
     _prune_old_backups(backup_dir, keep_n)
     return dest
 
 
 async def run_backup(
-    database_url: str, backup_dir: Path, today: str, keep_n: int = DEFAULT_BACKUP_KEEP_N
+    database_url: str,
+    backup_dir: Path,
+    today: str,
+    keep_n: int = DEFAULT_BACKUP_KEEP_N,
+    age_recipient: str | None = None,
 ) -> Path:
     """`VACUUM INTO` a timestamped file — safe against a live WAL database.
 
@@ -115,9 +159,15 @@ async def run_backup(
     because `VACUUM INTO` errors out rather than overwriting: with a date-only
     name a second run on the same day (restart, retry, double instance) crashed
     with "output file already exists". Retention stays with `_prune_old_backups`,
-    whose `catetin-*.db` glob still sorts oldest-first under this name.
+    whose `catetin-*.db*` glob still sorts oldest-first under this name.
+
+    With `age_recipient` set the plaintext is encrypted to `<name>.db.age` and
+    removed, and that is the path returned; without it the plaintext `.db` is
+    kept as before, which is what dev and tests use.
     """
-    return await asyncio.to_thread(_do_backup, database_url, backup_dir, today, keep_n)
+    return await asyncio.to_thread(
+        _do_backup, database_url, backup_dir, today, keep_n, age_recipient
+    )
 
 
 async def run_wal_checkpoint(writer_engine: AsyncEngine) -> None:

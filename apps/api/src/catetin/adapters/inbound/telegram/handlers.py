@@ -9,6 +9,7 @@ in `application/`. A handler's job is: build an `InboundCommand` via
 from __future__ import annotations
 
 import logging
+import secrets
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 from typing import Literal
@@ -17,6 +18,7 @@ from catetin.adapters.outbound.reporting.text_renderer import (
     render_day_totals,
     render_text,
 )
+from catetin.application.delete_account import DeleteAccount
 from catetin.application.generate_report import GenerateReport, PendingReview
 from catetin.application.manage_transactions import ManageTransactions
 from catetin.application.onboarding import (
@@ -96,6 +98,37 @@ class OnboardingState:
     proposed_name: str | None = None
 
 
+# `/hapusakun` buttons. Payloads are `hapus:{nonce}:{issued_at}` and
+# `hapus-unduh:{nonce}:{issued_at}`; `batal-hapus` needs no payload because
+# cancelling is safe to do twice.
+#
+# The nonce is checked against `deps.delete_pending` *and* the age is checked
+# against `issued_at`, and the two catch different things:
+#
+#   - `issued_at` catches the stale tap: an old keyboard scrolled back to
+#     tomorrow cannot erase an account, and the check survives a restart
+#     because the timestamp rides in the payload.
+#   - the stored nonce catches the replay: it is popped the moment a purge
+#     succeeds, so a double-tap (or a re-tap on the same message afterwards)
+#     cannot run a second purge and write a second `deletion_log` row for one
+#     request.
+#
+# Losing the dict on restart fails closed — the tap reads as expired and the
+# user types `/hapusakun` again, which is the right side to err on for a
+# button whose job is to destroy data.
+DELETE_PREFIX = "hapus:"
+DELETE_DOWNLOAD_PREFIX = "hapus-unduh:"
+DELETE_CANCEL = "batal-hapus"
+DELETE_NONCE_TTL_SECONDS = 300
+DELETE_EXPIRED_MESSAGE = "Tombol kedaluwarsa, ketik /hapusakun lagi."
+DELETE_DONE_MESSAGE = (
+    "Semua data kamu sudah dihapus. ✅\n"
+    "Backup terenkripsi terhapus otomatis dalam 7 hari.\n"
+    "Chat di Telegram hapus sendiri ya, bot nggak bisa.\n"
+    "Ketik /start kalau mau mulai lagi."
+)
+
+
 def _rupiah(amount: int) -> str:
     sign = "-" if amount < 0 else ""
     return f"{sign}Rp {abs(amount):,}".replace(",", ".")
@@ -113,6 +146,7 @@ class TelegramDeps:
     manage_transactions: ManageTransactions
     summarize: Summarize
     generate_report: GenerateReport
+    delete_account: DeleteAccount
     messaging: MessagingPort
     clock: ClockPort
     default_timezone: str
@@ -126,6 +160,10 @@ class TelegramDeps:
     # `has_onboarded` is only flipped at the very end, an abandoned run leaves
     # their previous state untouched.
     onboarding_pending: dict[int, OnboardingState] = field(default_factory=dict)
+    # user id -> (nonce, issued_at) for the one `/hapusakun` keyboard that
+    # user currently has live. See DELETE_PREFIX for why this is kept at all
+    # when the payload is otherwise self-describing.
+    delete_pending: dict[int, tuple[str, int]] = field(default_factory=dict)
 
 
 def _deps(context: ContextTypes.DEFAULT_TYPE) -> TelegramDeps:
@@ -252,11 +290,17 @@ async def on_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if cmd is None:
         return
     user = await _get_user(deps, cmd)
+    # `/batal` is the universal "no" in this bot. Mid-setup it means "get me
+    # out of onboarding"; with a live delete keyboard it stands that down too
+    # — otherwise a user who typed it to back out of the delete would get
+    # "Belum ada transaksi buat dibatalkan." and a still-armed button.
     if deps.onboarding_pending.pop(user.id, None) is not None:
-        # Mid-setup, `/batal` means "get me out of this", not "undo my last
-        # transaction" — the flow is what is in front of the user right now.
         await deps.messaging.send_text(user.id, ONBOARDING_CANCELLED)
         return
+    if deps.delete_pending.pop(user.id, None) is not None:
+        await deps.messaging.send_text(user.id, "Dibatalkan.")
+        return
+
     removed = await deps.manage_transactions.cancel_last(user.id)
     if removed is None:
         await deps.messaging.send_text(user.id, "Belum ada transaksi buat dibatalkan.")
@@ -434,6 +478,113 @@ async def _handle_timezone_callback(deps: TelegramDeps, update: Update, data: st
     await deps.messaging.send_text(user.id, f"Zona waktu diset ke {tz}.")
 
 
+async def _send_delete_keyboard(deps: TelegramDeps, user: User) -> None:
+    """Show (or re-show) the confirmation keyboard, minting a fresh nonce.
+
+    Re-showing after the "Unduh data dulu" branch deliberately restarts the
+    5-minute clock: rendering and sending a PDF can eat a good chunk of it,
+    and a user who just downloaded their data should not find the delete
+    button dead when they come back to it.
+    """
+    count = await deps.delete_account.preview(user.id)
+    nonce = secrets.token_hex(8)
+    issued_at = int(deps.clock.now().timestamp())
+    deps.delete_pending[user.id] = (nonce, issued_at)
+
+    payload = f"{nonce}:{issued_at}"
+    await deps.messaging.ask_action(
+        user.id,
+        f"Ini akan menghapus SEMUA catatan kamu ({count} transaksi). "
+        "Tidak bisa dibatalkan.",
+        [
+            ("📄 Unduh data dulu", f"{DELETE_DOWNLOAD_PREFIX}{payload}"),
+            ("✅ Hapus semua", f"{DELETE_PREFIX}{payload}"),
+            ("❌ Batal", DELETE_CANCEL),
+        ],
+    )
+
+
+def _delete_nonce_valid(deps: TelegramDeps, user_id: int, payload: str) -> bool:
+    try:
+        nonce, issued_at_str = payload.split(":")
+        issued_at = int(issued_at_str)
+    except ValueError:
+        return False
+
+    pending = deps.delete_pending.get(user_id)
+    if pending is None or not secrets.compare_digest(pending[0], nonce):
+        return False
+
+    age = int(deps.clock.now().timestamp()) - issued_at
+    return 0 <= age < DELETE_NONCE_TTL_SECONDS
+
+
+async def on_delete_account(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """`/hapusakun` — the UU PDP right to erasure, behind one confirmation."""
+    deps = _deps(context)
+    cmd = map_update(update)
+    if cmd is None:
+        return
+    user = await _get_user(deps, cmd)
+    await _send_delete_keyboard(deps, user)
+
+
+async def _handle_delete_callback(deps: TelegramDeps, update: Update, data: str) -> None:
+    if update.effective_user is None:
+        return
+    user = await deps.onboarding.get_or_create_user(
+        "telegram", str(update.effective_user.id), update.effective_user.full_name
+    )
+
+    if data == DELETE_CANCEL:
+        deps.delete_pending.pop(user.id, None)
+        await deps.messaging.send_text(user.id, "Dibatalkan.")
+        return
+
+    download = data.startswith(DELETE_DOWNLOAD_PREFIX)
+    payload = data.removeprefix(DELETE_DOWNLOAD_PREFIX if download else DELETE_PREFIX)
+    if not _delete_nonce_valid(deps, user.id, payload):
+        await deps.messaging.send_text(user.id, DELETE_EXPIRED_MESSAGE)
+        return
+
+    if download:
+        await _send_delete_export(deps, user)
+        await _send_delete_keyboard(deps, user)
+        return
+
+    # Burn the nonce before the purge, not after: if `execute()` raises
+    # halfway, the transaction has already rolled back, and a live button
+    # inviting a retry against a half-known state is not what we want the
+    # user holding. They can type `/hapusakun` again.
+    deps.delete_pending.pop(user.id, None)
+    # Anything still queued for this user refers to rows that are about to
+    # stop existing.
+    deps.pending_choices.pop(user.id, None)
+
+    await deps.delete_account.execute(user.id)
+    await deps.messaging.send_text(user.id, DELETE_DONE_MESSAGE)
+
+
+async def _send_delete_export(deps: TelegramDeps, user: User) -> None:
+    """"Unduh data dulu" — the same PDF `/lapor` produces, over the same
+    7-day window, so there is exactly one report path to maintain.
+
+    `render()` rather than `execute()`: the review gate and the rate limit
+    both belong to `/lapor` as a reporting feature. Someone taking their data
+    out on the way to deleting it should not be told to come back in an hour,
+    and should not be asked to triage flagged rows first.
+    """
+    today = deps.clock.today_local(user.timezone)
+    start = today - timedelta(days=WEEK_DAYS - 1)
+    result = await deps.generate_report.render(
+        user.id, start, today, period_label=REPORT_PERIOD_LABEL
+    )
+    filename = f"laporan-{start.isoformat()}-{today.isoformat()}.pdf"
+    await deps.messaging.send_document(
+        user.id, filename, result.pdf_bytes, caption=f"📊 {REPORT_PERIOD_LABEL}"
+    )
+
+
 async def on_digest(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     deps = _deps(context)
     cmd = map_update(update)
@@ -560,6 +711,13 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     await query.answer()
 
     data = query.data or ""
+
+    # Before the other branches: `hapus:`/`hapus-unduh:` are distinct prefixes
+    # (neither is a prefix of the other), so ordering here is about keeping
+    # the destructive path unambiguous rather than resolving a real clash.
+    if data == DELETE_CANCEL or data.startswith((DELETE_PREFIX, DELETE_DOWNLOAD_PREFIX)):
+        await _handle_delete_callback(deps, update, data)
+        return
 
     if data.startswith((REVIEW_EXCLUDE_PREFIX, REVIEW_KEEP_PREFIX)):
         await _handle_review_callback(deps, update, data)
