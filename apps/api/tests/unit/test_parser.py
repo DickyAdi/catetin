@@ -150,6 +150,80 @@ async def test_leading_qty_unit_after_a_verb_is_still_a_line_total(
     assert tx.unit_amount == 15_000
 
 
+# --- bare qty (the unit word left out) ---------------------------------
+
+
+async def test_bare_qty_without_a_unit_word(parser: ParserPort) -> None:
+    """QA round 2: "jual ayam 5 10rb" must mean the same as
+    "jual ayam 5 ekor 10rb" — people drop the unit word, and before the fix
+    the whole thing collapsed into one 10rb transaction named "Ayam 5"."""
+    result = await parser.parse("jual ayam 5 10rb", today=TODAY)
+
+    assert len(result) == 1
+    tx = result[0]
+    assert tx.kind == "sale"
+    assert tx.item == "Ayam"
+    assert tx.qty == 5
+    assert tx.total_amount == 50_000
+    assert tx.unit_amount == 10_000
+
+
+@pytest.mark.parametrize(
+    ("text", "qty", "total"),
+    [
+        ("jual nasi goreng 2 15rb", 2, 30_000),
+        ("jual ayam 5x 10rb", 5, 50_000),
+        ("jual es teh 100 3rb", 100, 300_000),
+        ("jual ayam 3 15.000", 3, 45_000),
+        ("jual ayam 2 Rp15.000", 2, 30_000),
+    ],
+)
+async def test_bare_qty_variants(
+    parser: ParserPort, text: str, qty: int, total: int
+) -> None:
+    result = await parser.parse(text, today=TODAY)
+
+    assert len(result) == 1
+    assert result[0].qty == qty
+    assert result[0].total_amount == total
+
+
+@pytest.mark.parametrize(
+    ("text", "item", "total"),
+    [
+        # Only a *price*-looking second number counts, so a bare pair stays one
+        # oddly-named item rather than becoming 50 x 60.
+        ("jual ayam 50 60", "Ayam 50", 60),
+        # The digits must start a token: "5.000" must never split into a qty
+        # "5" (or, worse, a qty "000") plus an amount.
+        ("jual ayam 5.000 10rb", "Ayam 5.000", 10_000),
+        # A trailing count is not a leading one.
+        ("jual pulsa 10rb 5", "Pulsa 5", 10_000),
+        # "5 juta" is itself an amount, not a count followed by a price.
+        ("bayar utang 5 juta", "Utang", 5_000_000),
+    ],
+)
+async def test_bare_qty_does_not_misfire(
+    parser: ParserPort, text: str, item: str, total: int
+) -> None:
+    result = await parser.parse(text, today=TODAY)
+
+    assert len(result) == 1
+    assert result[0].item == item
+    assert result[0].qty == 1
+    assert result[0].total_amount == total
+
+
+async def test_qty_unit_form_wins_over_the_bare_form(parser: ParserPort) -> None:
+    """The bare-qty rule is only consulted when no "<qty> <unit>" pair was
+    found, so the leading-qty line-total semantics are untouched."""
+    result = await parser.parse("3 pcs ayam 50rb", today=TODAY)
+
+    assert len(result) == 1
+    assert result[0].qty == 3
+    assert result[0].total_amount == 50_000  # a line total, not 3 x 50rb
+
+
 async def test_trailing_slash_qty(parser: ParserPort) -> None:
     result = await parser.parse("ayam 50rb/2", today=TODAY)
 
