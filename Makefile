@@ -9,6 +9,7 @@ ALLOY_UI := http://127.0.0.1:12345
 .DEFAULT_GOAL := help
 
 .PHONY: help setup dev dev-api dev-fe dev-all dev-down dev-bot bot-commands test lint typecheck migrate migrate-new db-reset \
+	webhook-test webhook-check webhook-remove \
 	dockerized docker-up docker-down clean status deploy \
 	infra-up infra-down infra-logs infra-ps infra-dev-up infra-dev-down obs-check
 
@@ -94,6 +95,15 @@ db-reset: ## Drop the dev SQLite DB (incl. WAL/SHM) and re-migrate to head — d
 	@rm -f $(APP_DIR)/catetin.db $(APP_DIR)/catetin.db-wal $(APP_DIR)/catetin.db-shm
 	@cd $(APP_DIR) && uv run alembic upgrade head
 	@echo "DB reset + migrated to head"
+
+webhook-test: ## Test Telegram webhook via a public tunnel: make webhook-test URL=https://xxx.trycloudflare.com
+	@cd $(APP_DIR) && bash scripts/test_webhook.sh "$(URL)"
+
+webhook-check: ## Show current Telegram webhook state
+	@cd $(APP_DIR) && bash scripts/test_webhook.sh --check
+
+webhook-remove: ## Delete the Telegram webhook (back to polling mode)
+	@cd $(APP_DIR) && bash scripts/test_webhook.sh --remove
 
 dockerized: ## Build and run the backend via Docker Compose
 	docker compose up -d --build
