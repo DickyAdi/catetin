@@ -34,11 +34,20 @@ class AskedAction:
 
 
 @dataclass
+class UpdatedMessage:
+    user_id: int
+    message_id: int
+    text: str
+    buttons: list[tuple[str, str]] | None
+
+
+@dataclass
 class FakeMessaging:
     texts: list[SentText] = field(default_factory=list)
     documents: list[SentDocument] = field(default_factory=list)
     choices: list[AskedChoice] = field(default_factory=list)
     actions: list[AskedAction] = field(default_factory=list)
+    updates: list[UpdatedMessage] = field(default_factory=list)
 
     async def send_text(self, user_id: int, text: str) -> None:
         self.texts.append(SentText(user_id=user_id, text=text))
@@ -57,3 +66,16 @@ class FakeMessaging:
         self, user_id: int, prompt: str, buttons: list[tuple[str, str]]
     ) -> None:
         self.actions.append(AskedAction(user_id=user_id, prompt=prompt, buttons=buttons))
+
+    async def update_message(
+        self,
+        user_id: int,
+        message_id: int,
+        text: str,
+        buttons: list[tuple[str, str]] | None = None,
+    ) -> None:
+        self.updates.append(
+            UpdatedMessage(
+                user_id=user_id, message_id=message_id, text=text, buttons=buttons
+            )
+        )

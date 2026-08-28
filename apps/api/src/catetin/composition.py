@@ -164,7 +164,11 @@ def wire(
     # instance (`application.bot`) — no second token, no second connection
     # pool. Handlers read their dependencies from `bot_data["deps"]`.
     application = telegram_app.build_application(settings, polling=polling)
-    messaging = cast(MessagingPort, TelegramSender(application.bot, reader_uow_factory))
+    # Annotated, not cast: this assignment is the only thing that checks
+    # `TelegramSender` still implements every `MessagingPort` method, and a
+    # port the sender has quietly stopped satisfying fails at the first tap in
+    # production rather than here.
+    messaging: MessagingPort = TelegramSender(application.bot, reader_uow_factory)
     application.bot_data["deps"] = telegram_handlers.TelegramDeps(
         onboarding=onboarding,
         record_transactions=record_transactions,

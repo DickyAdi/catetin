@@ -124,9 +124,13 @@ class OnboardingState:
 # Losing the dict on restart fails closed — the tap reads as expired and the
 # user types `/hapusakun` again, which is the right side to err on for a
 # button whose job is to destroy data.
-# `/list` pagination. The payload is the offset itself and there is no
-# per-user page state — see `list_view` for why, and for the 4096-character
-# ceiling a page is rendered under.
+
+# `/list` pagination. The payload is the offset itself, so which page a
+# keyboard shows is never read from server state — see `list_view` for why,
+# and for the 4096-character ceiling a page is rendered under. Paging happens
+# by editing the message the keyboard sits on, so a walk through 5 pages
+# leaves one message behind instead of 5, and "✖️ Tutup" can actually take the
+# buttons away.
 LIST_EMPTY = "Belum ada transaksi."
 LIST_CLOSED = "Oke, ditutup. Ketik /list lagi kapan aja."
 LIST_UNKNOWN_BUTTON = "Tombol nggak dikenal, ketik /list lagi ya."
@@ -179,6 +183,13 @@ class TelegramDeps:
     # user currently has live. See DELETE_PREFIX for why this is kept at all
     # when the payload is otherwise self-describing.
     delete_pending: dict[int, tuple[str, int]] = field(default_factory=dict)
+    # user id -> (message_id, offset) of the most recent `/list` page edit.
+    # Purely a duplicate-tap guard (see `_handle_list_callback`); `/list` still
+    # reads its page out of the payload, so losing this on a restart costs
+    # nothing but one redundant edit. Keyed by user rather than by message so
+    # it stays bounded like the dicts above — a tap on an older `/list`
+    # message simply misses the guard and is served normally.
+    list_last_edit: dict[int, tuple[int, int]] = field(default_factory=dict)
 
 
 def _deps(context: ContextTypes.DEFAULT_TYPE) -> TelegramDeps:
@@ -286,22 +297,50 @@ async def on_list(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if cmd is None:
         return
     user = await _get_user(deps, cmd)
-    await _send_list_page(deps, user, 0)
+    # `/list` is a fresh message: there is nothing on screen to edit yet.
+    await _show_list_page(deps, user, 0, message_id=None)
 
 
-async def _send_list_page(deps: TelegramDeps, user: User, offset: int) -> None:
+async def _show_list_page(
+    deps: TelegramDeps, user: User, offset: int, message_id: int | None
+) -> None:
+    """Put one page on screen — a new message for `/list`, an edit for a tap.
+
+    The two differ only in delivery: a page tapped into view replaces the page
+    it was tapped from, so the chat keeps one `/list` message however far the
+    user walks.
+    """
     page = await deps.manage_transactions.list_page(user.id, offset)
-    if not page.items:
-        await deps.messaging.send_text(user.id, LIST_EMPTY)
+    text = render_page(page) if page.items else LIST_EMPTY
+    buttons = page_buttons(page) if page.items else []
+
+    if message_id is None:
+        if not buttons:
+            # One page (or none): plain text, which keeps the short `/list`
+            # byte-for-byte what it was before pagination existed.
+            await deps.messaging.send_text(user.id, text)
+            return
+        await deps.messaging.ask_action(user.id, text, buttons)
         return
-    text = render_page(page)
-    buttons = page_buttons(page)
-    if not buttons:
-        # Everything fits on one page: send it as text, which also keeps the
-        # single-page `/list` byte-for-byte what it was before pagination.
-        await deps.messaging.send_text(user.id, text)
-        return
-    await deps.messaging.ask_action(user.id, text, buttons)
+
+    # `page.offset`, not the requested one: `list_page` snaps and clamps, and
+    # the guard has to hold the page actually rendered so the next tap on the
+    # arrows we just drew compares against the same number.
+    deps.list_last_edit[user.id] = (message_id, page.offset)
+    await deps.messaging.update_message(user.id, message_id, text, buttons or None)
+
+
+def _callback_message_id(update: Update) -> int | None:
+    """The message a keyboard is attached to, if we can still address it.
+
+    None for a callback with no message behind it (an inline-mode keyboard,
+    which this bot never sends). Callers fall back to a new message, which is
+    worse but never wrong.
+    """
+    query = update.callback_query
+    if query is None or query.message is None:
+        return None
+    return query.message.message_id
 
 
 async def _handle_list_callback(deps: TelegramDeps, update: Update, data: str) -> None:
@@ -317,8 +356,17 @@ async def _handle_list_callback(deps: TelegramDeps, update: Update, data: str) -
     user = await deps.onboarding.get_or_create_user(
         "telegram", str(update.effective_user.id), update.effective_user.full_name
     )
+    message_id = _callback_message_id(update)
+
     if data == LIST_CLOSE:
-        await deps.messaging.send_text(user.id, LIST_CLOSED)
+        deps.list_last_edit.pop(user.id, None)
+        if message_id is None:
+            await deps.messaging.send_text(user.id, LIST_CLOSED)
+            return
+        # `buttons=None` is the whole point of closing: the acknowledgement
+        # replaces the page and the keyboard goes with it, so a stale list
+        # cannot be paged again from scrollback.
+        await deps.messaging.update_message(user.id, message_id, LIST_CLOSED, None)
         return
 
     try:
@@ -327,7 +375,13 @@ async def _handle_list_callback(deps: TelegramDeps, update: Update, data: str) -
         # A payload we never sent, or one from a scheme we no longer use.
         await deps.messaging.send_text(user.id, LIST_UNKNOWN_BUTTON)
         return
-    await _send_list_page(deps, user, offset)
+
+    if message_id is not None and deps.list_last_edit.get(user.id) == (message_id, offset):
+        # An impatient double tap on the same arrow. The edit would be
+        # rejected as "message is not modified" anyway; skipping it saves the
+        # round trip and the page query behind it.
+        return
+    await _show_list_page(deps, user, offset, message_id)
 
 
 async def on_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -606,6 +660,7 @@ async def _handle_delete_callback(deps: TelegramDeps, update: Update, data: str)
     # Anything still queued for this user refers to rows that are about to
     # stop existing.
     deps.pending_choices.pop(user.id, None)
+    deps.list_last_edit.pop(user.id, None)
 
     await deps.delete_account.execute(user.id)
     await deps.messaging.send_text(user.id, DELETE_DONE_MESSAGE)

@@ -5,6 +5,10 @@ Two levels are exercised: `render_page`/`page_buttons` directly, where the
 4096-character ceiling lives, and the handler end to end against fakes, where
 what matters is that walking the keyboard shows every transaction exactly once
 and that a tap on an old keyboard cannot crash or lie about the page count.
+
+`/list` sends one message; every page after the first is an edit of it, so the
+handler assertions below are mostly about `messaging.updates` — and about
+`messaging.actions` staying at length 1 no matter how far the user walks.
 """
 
 from __future__ import annotations
@@ -48,6 +52,8 @@ from tests.fakes.frozen_clock import FrozenClock
 
 TELEGRAM_ID = 12345678
 TODAY = date(2026, 8, 15)
+# The message a `/list` keyboard sits on, i.e. the one every page edits.
+LIST_MESSAGE_ID = 4242
 
 
 @pytest.fixture
@@ -92,8 +98,16 @@ class _FakeContext:
 
 
 @dataclass
+class _FakeMessage:
+    message_id: int
+
+
+@dataclass
 class _FakeQuery:
     data: str
+    # None models the one callback shape that has no message behind it (an
+    # inline-mode keyboard); the handler must still answer the user somehow.
+    message: _FakeMessage | None = None
     answered: bool = False
 
     async def answer(self) -> None:
@@ -122,9 +136,14 @@ def _message_update(text: str) -> Update:
     )
 
 
-def _callback_update(data: str) -> _FakeCallbackUpdate:
+def _callback_update(
+    data: str, message_id: int | None = LIST_MESSAGE_ID
+) -> _FakeCallbackUpdate:
     return _FakeCallbackUpdate(
-        callback_query=_FakeQuery(data=data),
+        callback_query=_FakeQuery(
+            data=data,
+            message=None if message_id is None else _FakeMessage(message_id=message_id),
+        ),
         effective_user=TelegramUser(id=TELEGRAM_ID, is_bot=False, first_name="Rina"),
     )
 
@@ -153,8 +172,12 @@ async def _seed(deps: TelegramDeps, uow: FakeUnitOfWork, n: int) -> int:
     return user.id
 
 
-async def _tap(deps: TelegramDeps, data: str) -> None:
-    await on_callback(cast(Any, _callback_update(data)), cast(Any, _FakeContext(deps)))
+async def _tap(
+    deps: TelegramDeps, data: str, message_id: int | None = LIST_MESSAGE_ID
+) -> None:
+    await on_callback(
+        cast(Any, _callback_update(data, message_id)), cast(Any, _FakeContext(deps))
+    )
 
 
 def _labels(buttons: list[tuple[str, str]]) -> list[str]:
@@ -207,11 +230,26 @@ async def test_next_shows_the_second_page_with_both_arrows(
 
     await _tap(deps, f"{LIST_PREFIX}10")
 
-    shown = messaging.actions[-1]
-    assert shown.prompt.splitlines()[0] == "📋 Transaksi 11-20 dari 25"
+    shown = messaging.updates[-1]
+    assert shown.text.splitlines()[0] == "📋 Transaksi 11-20 dari 25"
+    assert shown.buttons is not None
     assert _labels(shown.buttons) == ["⬅️", "Hal 2/3", "➡️", "✖️ Tutup"]
     assert shown.buttons[0][1] == f"{LIST_PREFIX}0"
     assert shown.buttons[2][1] == f"{LIST_PREFIX}20"
+
+
+async def test_next_edits_the_first_page_instead_of_sending_a_new_message(
+    deps: TelegramDeps, uow: FakeUnitOfWork, messaging: FakeMessaging
+) -> None:
+    """The point of edit-message paging: the chat keeps one `/list` message."""
+    await _seed(deps, uow, 25)
+    await on_list(_message_update("/list"), cast(Any, _FakeContext(deps)))
+
+    await _tap(deps, f"{LIST_PREFIX}10")
+
+    assert len(messaging.actions) == 1  # still just the message `/list` sent
+    assert messaging.texts == []
+    assert [u.message_id for u in messaging.updates] == [LIST_MESSAGE_ID]
 
 
 async def test_last_page_shows_the_remainder_with_no_next_arrow(
@@ -222,10 +260,11 @@ async def test_last_page_shows_the_remainder_with_no_next_arrow(
 
     await _tap(deps, f"{LIST_PREFIX}20")
 
-    shown = messaging.actions[-1]
-    lines = shown.prompt.splitlines()
+    shown = messaging.updates[-1]
+    lines = shown.text.splitlines()
     assert lines[0] == "📋 Transaksi 21-25 dari 25"
     assert len(lines) == 6  # header + the 5 remaining rows
+    assert shown.buttons is not None
     assert _labels(shown.buttons) == ["⬅️", "Hal 3/3", "✖️ Tutup"]
 
 
@@ -233,14 +272,15 @@ async def test_walking_all_three_pages_shows_every_transaction_once(
     deps: TelegramDeps, uow: FakeUnitOfWork, messaging: FakeMessaging
 ) -> None:
     """The whole point of the feature: 25 transactions, 3 taps, nothing
-    skipped and nothing shown twice."""
+    skipped and nothing shown twice — all inside one message."""
     await _seed(deps, uow, 25)
     await on_list(_message_update("/list"), cast(Any, _FakeContext(deps)))
     await _tap(deps, f"{LIST_PREFIX}10")
     await _tap(deps, f"{LIST_PREFIX}20")
 
-    pages = [action.prompt for action in messaging.actions]
+    pages = [messaging.actions[0].prompt] + [u.text for u in messaging.updates]
     assert len(pages) == 3
+    assert {u.message_id for u in messaging.updates} == {LIST_MESSAGE_ID}
 
     # Newest first: `item-25` heads page 1, `item-1` closes page 3.
     assert " item-25 " in pages[0] and " item-16 " in pages[0]
@@ -260,7 +300,7 @@ async def test_row_numbering_is_absolute_not_per_page(
 
     await _tap(deps, f"{LIST_PREFIX}10")
 
-    first_row = messaging.actions[-1].prompt.splitlines()[1]
+    first_row = messaging.updates[-1].text.splitlines()[1]
     assert first_row.startswith("11. ")
 
 
@@ -326,19 +366,37 @@ async def test_offset_past_the_end_falls_back_to_the_last_page(
 
     await _tap(deps, f"{LIST_PREFIX}200")
 
-    shown = messaging.actions[-1]
-    assert shown.prompt.splitlines()[0] == "📋 Transaksi 21-25 dari 25"
+    shown = messaging.updates[-1]
+    assert shown.text.splitlines()[0] == "📋 Transaksi 21-25 dari 25"
+    assert shown.buttons is not None
     assert _labels(shown.buttons) == ["⬅️", "Hal 3/3", "✖️ Tutup"]
 
 
 async def test_offset_past_the_end_of_an_emptied_list_says_so(
     deps: TelegramDeps, uow: FakeUnitOfWork, messaging: FakeMessaging
 ) -> None:
+    """Every row cancelled under a live keyboard: the page it was tapped from
+    is replaced by the empty notice, and the arrows go with it."""
     await _seed(deps, uow, 0)
 
     await _tap(deps, f"{LIST_PREFIX}20")
 
-    assert [t.text for t in messaging.texts] == [LIST_EMPTY]
+    assert [(u.text, u.buttons) for u in messaging.updates] == [(LIST_EMPTY, None)]
+    assert messaging.texts == []
+
+
+async def test_a_shrunk_list_that_now_fits_one_page_loses_its_navigation(
+    deps: TelegramDeps, uow: FakeUnitOfWork, messaging: FakeMessaging
+) -> None:
+    """Down to 6 rows since the keyboard was drawn: the edit shows them all and
+    keeps no buttons, because `page_buttons` offers none for a single page."""
+    await _seed(deps, uow, 6)
+
+    await _tap(deps, f"{LIST_PREFIX}10")
+
+    shown = messaging.updates[-1]
+    assert shown.text.splitlines()[0] == "📋 Transaksi 1-6 dari 6"
+    assert shown.buttons is None
 
 
 async def test_offset_between_pages_is_snapped_to_a_page_boundary(
@@ -350,8 +408,9 @@ async def test_offset_between_pages_is_snapped_to_a_page_boundary(
 
     await _tap(deps, f"{LIST_PREFIX}7")
 
-    shown = messaging.actions[-1]
-    assert shown.prompt.splitlines()[0] == "📋 Transaksi 1-10 dari 25"
+    shown = messaging.updates[-1]
+    assert shown.text.splitlines()[0] == "📋 Transaksi 1-10 dari 25"
+    assert shown.buttons is not None
     assert _labels(shown.buttons) == ["Hal 1/3", "➡️", "✖️ Tutup"]
 
 
@@ -362,18 +421,22 @@ async def test_negative_offset_lands_on_the_first_page(
 
     await _tap(deps, f"{LIST_PREFIX}-40")
 
-    assert messaging.actions[-1].prompt.splitlines()[0] == "📋 Transaksi 1-10 dari 25"
+    assert messaging.updates[-1].text.splitlines()[0] == "📋 Transaksi 1-10 dari 25"
 
 
 async def test_unparseable_payload_is_answered_not_raised(
     deps: TelegramDeps, uow: FakeUnitOfWork, messaging: FakeMessaging
 ) -> None:
+    """A payload we cannot read is answered in a new message, not by editing:
+    we do not know what page the message it came from is showing, so replacing
+    its text would destroy a list the user can still read."""
     await _seed(deps, uow, 25)
 
     await _tap(deps, f"{LIST_PREFIX}halaman-dua")
 
     assert [t.text for t in messaging.texts] == [LIST_UNKNOWN_BUTTON]
     assert messaging.actions == []
+    assert messaging.updates == []
 
 
 async def test_page_indicator_tap_does_nothing(
@@ -385,17 +448,122 @@ async def test_page_indicator_tap_does_nothing(
 
     assert messaging.texts == []
     assert messaging.actions == []
+    assert messaging.updates == []
 
 
-async def test_close_acknowledges_and_stops_paging(
+async def test_close_replaces_the_page_and_takes_the_keyboard_away(
+    deps: TelegramDeps, uow: FakeUnitOfWork, messaging: FakeMessaging
+) -> None:
+    """"✖️ Tutup" is the reason `update_message` exists: before it, closing
+    could only apologise while the buttons stayed live in scrollback."""
+    await _seed(deps, uow, 25)
+    await on_list(_message_update("/list"), cast(Any, _FakeContext(deps)))
+
+    await _tap(deps, LIST_CLOSE)
+
+    shown = messaging.updates[-1]
+    assert (shown.message_id, shown.text, shown.buttons) == (
+        LIST_MESSAGE_ID,
+        LIST_CLOSED,
+        None,
+    )
+    assert messaging.texts == []
+    assert len(messaging.actions) == 1  # nothing new was sent to say it
+
+
+async def test_close_on_an_unaddressable_message_still_acknowledges(
+    deps: TelegramDeps, uow: FakeUnitOfWork, messaging: FakeMessaging
+) -> None:
+    """No message behind the callback means no edit is possible; the user is
+    told anyway rather than being left with a silent button."""
+    await _seed(deps, uow, 25)
+
+    await _tap(deps, LIST_CLOSE, message_id=None)
+
+    assert [t.text for t in messaging.texts] == [LIST_CLOSED]
+    assert messaging.updates == []
+
+
+async def test_paging_an_unaddressable_message_falls_back_to_a_new_page(
     deps: TelegramDeps, uow: FakeUnitOfWork, messaging: FakeMessaging
 ) -> None:
     await _seed(deps, uow, 25)
 
-    await _tap(deps, LIST_CLOSE)
+    await _tap(deps, f"{LIST_PREFIX}10", message_id=None)
 
-    assert [t.text for t in messaging.texts] == [LIST_CLOSED]
-    assert messaging.actions == []
+    assert messaging.updates == []
+    assert messaging.actions[-1].prompt.splitlines()[0] == "📋 Transaksi 11-20 dari 25"
+
+
+# --- the duplicate-tap guard ------------------------------------------------
+
+
+async def test_tapping_the_same_arrow_twice_edits_once(
+    deps: TelegramDeps, uow: FakeUnitOfWork, messaging: FakeMessaging
+) -> None:
+    """Telegram would reject the second edit as "message is not modified"; the
+    guard drops it here, before the page query."""
+    await _seed(deps, uow, 25)
+    await on_list(_message_update("/list"), cast(Any, _FakeContext(deps)))
+
+    await _tap(deps, f"{LIST_PREFIX}10")
+    await _tap(deps, f"{LIST_PREFIX}10")
+
+    assert len(messaging.updates) == 1
+
+
+async def test_the_guard_does_not_block_paging_back_and_forth(
+    deps: TelegramDeps, uow: FakeUnitOfWork, messaging: FakeMessaging
+) -> None:
+    """It suppresses a repeat of the *current* page only — ⬅️ then ➡️ back to a
+    page already seen is a real navigation and must redraw."""
+    await _seed(deps, uow, 25)
+    await on_list(_message_update("/list"), cast(Any, _FakeContext(deps)))
+
+    await _tap(deps, f"{LIST_PREFIX}10")
+    await _tap(deps, f"{LIST_PREFIX}0")
+    await _tap(deps, f"{LIST_PREFIX}10")
+
+    headers = [u.text.splitlines()[0] for u in messaging.updates]
+    assert headers == [
+        "📋 Transaksi 11-20 dari 25",
+        "📋 Transaksi 1-10 dari 25",
+        "📋 Transaksi 11-20 dari 25",
+    ]
+
+
+async def test_a_second_list_message_pages_independently(
+    deps: TelegramDeps, uow: FakeUnitOfWork, messaging: FakeMessaging
+) -> None:
+    """Two `/list` messages in one chat each edit themselves — the guard is
+    keyed on the message, so the same offset on the other one is not a
+    duplicate."""
+    await _seed(deps, uow, 25)
+
+    await _tap(deps, f"{LIST_PREFIX}10", message_id=LIST_MESSAGE_ID)
+    await _tap(deps, f"{LIST_PREFIX}10", message_id=LIST_MESSAGE_ID + 1)
+
+    assert [u.message_id for u in messaging.updates] == [
+        LIST_MESSAGE_ID,
+        LIST_MESSAGE_ID + 1,
+    ]
+
+
+async def test_closing_clears_the_guard_so_a_later_list_pages_normally(
+    deps: TelegramDeps, uow: FakeUnitOfWork, messaging: FakeMessaging
+) -> None:
+    await _seed(deps, uow, 25)
+
+    await _tap(deps, f"{LIST_PREFIX}10")
+    await _tap(deps, LIST_CLOSE)
+    await _tap(deps, f"{LIST_PREFIX}10")
+
+    headers = [u.text.splitlines()[0] for u in messaging.updates]
+    assert headers == [
+        "📋 Transaksi 11-20 dari 25",
+        LIST_CLOSED,
+        "📋 Transaksi 11-20 dari 25",
+    ]
 
 
 async def test_callback_is_always_answered(

@@ -25,3 +25,28 @@ class MessagingPort(Protocol):
         needed where the choice must encode state statelessly (FR-2 review
         gate: the report period, so no server-side session is kept)."""
         ...
+
+    async def update_message(
+        self,
+        user_id: int,
+        message_id: int,
+        text: str,
+        buttons: list[tuple[str, str]] | None = None,
+    ) -> None:
+        """Replace what an already-sent message says, in place.
+
+        `message_id` is whatever the adapter handed out for that message — an
+        opaque handle here, not a Telegram concept; a caller only ever gets one
+        back from the same adapter (for Telegram, off the tap that triggered
+        this call).
+
+        `buttons` follows `ask_action`; `None` (or an empty list) leaves the
+        message with no buttons at all, which is the only way to retire a
+        keyboard once its question has been answered.
+
+        Best-effort, like every other send: a message too old to edit, or one
+        already carrying this exact text, is not an error the caller can act
+        on. Unlike `send_text` the text cannot be split across messages, so the
+        caller owns keeping it inside one — see `list_view` for `/list`'s take.
+        """
+        ...
