@@ -169,8 +169,16 @@ class FakeTransactionRepository:
         return None
 
     async def list_recent(self, user_id: int, limit: int = 20) -> list[Transaction]:
-        rows = sorted(self._live(user_id), key=lambda t: (t.created_at, t.id), reverse=True)
-        return rows[:limit]
+        return self._recent(user_id)[:limit]
+
+    async def list_page(self, user_id: int, offset: int, limit: int) -> list[Transaction]:
+        return self._recent(user_id)[offset : offset + limit]
+
+    async def count_active_for_user(self, user_id: int) -> int:
+        return len(self._live(user_id))
+
+    def _recent(self, user_id: int) -> list[Transaction]:
+        return sorted(self._live(user_id), key=lambda t: (t.created_at, t.id), reverse=True)
 
     async def soft_delete_last(self, user_id: int) -> Transaction | None:
         rows = sorted(self._live(user_id), key=lambda t: (t.created_at, t.id), reverse=True)

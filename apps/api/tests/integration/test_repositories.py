@@ -296,6 +296,70 @@ async def test_list_recent_includes_excluded_transactions(
     assert excluded["usaha"] is False
 
 
+async def test_list_page_windows_the_same_order_as_list_recent(
+    uow: SqlAlchemyUnitOfWork,
+) -> None:
+    """`/list` pagination: consecutive windows must partition the history —
+    every row exactly once, in `list_recent`'s order."""
+    async with uow as u:
+        user = await u.users.create("telegram", "7010")
+        for i in range(25):
+            await u.transactions.add(user.id, _parsed(item=f"item-{i:02d}"))
+        await u.commit()
+
+    async with uow as u:
+        total = await u.transactions.count_active_for_user(user.id)
+        pages = [await u.transactions.list_page(user.id, offset, 10) for offset in (0, 10, 20)]
+        past_end = await u.transactions.list_page(user.id, 30, 10)
+        ordered = await u.transactions.list_recent(user.id, 25)
+
+    assert total == 25
+    assert [len(p) for p in pages] == [10, 10, 5]
+    assert [t.id for page in pages for t in page] == [t.id for t in ordered]
+    assert past_end == []
+
+
+async def test_list_page_and_count_active_skip_soft_deleted_rows(
+    uow: SqlAlchemyUnitOfWork,
+) -> None:
+    """The page count comes from `count_active_for_user`, so it has to agree
+    with what the windows contain — a `/batal`'d row is in neither."""
+    async with uow as u:
+        user = await u.users.create("telegram", "7011")
+        for item in ("kopi", "teh", "roti"):
+            await u.transactions.add(user.id, _parsed(item=item))
+        await u.transactions.soft_delete_last(user.id)
+        await u.commit()
+
+    async with uow as u:
+        active = await u.transactions.count_active_for_user(user.id)
+        every_row = await u.transactions.count_for_user(user.id)
+        page = await u.transactions.list_page(user.id, 0, 10)
+
+    assert active == 2
+    assert every_row == 3  # `/hapusakun`'s count still sees the cancelled row
+    assert {t.item for t in page} == {"kopi", "teh"}
+
+
+async def test_list_page_and_count_active_are_scoped_to_one_user(
+    uow: SqlAlchemyUnitOfWork,
+) -> None:
+    async with uow as u:
+        user_a = await u.users.create("telegram", "7012")
+        user_b = await u.users.create("telegram", "7013")
+        await u.transactions.add(user_a.id, _parsed(item="punya-a"))
+        for i in range(3):
+            await u.transactions.add(user_b.id, _parsed(item=f"punya-b-{i}"))
+        await u.commit()
+
+    async with uow as u:
+        a_page = await u.transactions.list_page(user_a.id, 0, 10)
+        assert await u.transactions.count_active_for_user(user_a.id) == 1
+        assert await u.transactions.count_active_for_user(user_b.id) == 3
+
+    assert [t.item for t in a_page] == ["punya-a"]
+
+
 async def test_cancel_last_works_on_excluded_transaction(
     uow: SqlAlchemyUnitOfWork,
 ) -> None:

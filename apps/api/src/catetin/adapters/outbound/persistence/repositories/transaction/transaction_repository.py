@@ -89,6 +89,37 @@ class SqlAlchemyTransactionRepository:
         rows = (await self._session.execute(stmt)).scalars().all()
         return [transaction_to_domain(row) for row in rows]
 
+    async def list_page(self, user_id: int, offset: int, limit: int) -> list[Transaction]:
+        """One window of `list_recent`'s ordering, for `/list` pagination.
+
+        Same ORDER BY as `list_recent` — an OFFSET is only meaningful against a
+        total order, so the `id` tiebreaker matters more here than there: with
+        two rows sharing a `created_at` second, an unstable sort could show one
+        of them on both page 1 and page 2 and the other on neither.
+        """
+        stmt = (
+            select(TransactionRow)
+            .where(TransactionRow.user_id == user_id)
+            .order_by(desc(TransactionRow.created_at), desc(TransactionRow.id))
+            .offset(offset)
+            .limit(limit)
+        )
+        rows = (await self._session.execute(stmt)).scalars().all()
+        return [transaction_to_domain(row) for row in rows]
+
+    async def count_active_for_user(self, user_id: int) -> int:
+        """How many rows `/list` can page through — soft-deleted ones excluded,
+        so the page count matches what the windows actually contain.
+
+        Not `count_for_user`: that one counts `/batal`'d rows too, because
+        `/hapusakun` is about to erase those as well.
+        """
+        stmt = select(func.count()).select_from(TransactionRow).where(
+            TransactionRow.user_id == user_id,
+            TransactionRow.deleted_at.is_(None),
+        )
+        return (await self._session.execute(stmt)).scalar_one()
+
     async def soft_delete_last(self, user_id: int) -> Transaction | None:
         stmt = (
             select(TransactionRow)
