@@ -5,18 +5,25 @@ length guarantee below is the interesting part of `/list` and deserves to be
 testable without building an `Update`.
 
 Why the guarantee matters here specifically: `MessagingPort.send_text` chunks
-long text across several messages, but `ask_action` cannot — a keyboard belongs
-to exactly one message, so the page and its buttons have to fit in one. An
-oversized `sendMessage` is not truncated by Telegram, it is rejected (400), and
-`TelegramSender._send` logs that and returns, so the user would tap "next" and
-get silence. Hence every line is hard-capped rather than merely expected to fit.
+long text across several messages, but `ask_action` and `update_message` cannot
+— a keyboard belongs to exactly one message, so the page and its buttons have
+to fit in one. An oversized `sendMessage`/`editMessageText` is not truncated by
+Telegram, it is rejected (400), and `TelegramSender._send` logs that and
+returns, so the user would tap "next" and get silence. Hence every line is
+hard-capped rather than merely expected to fit.
+
+Pages after the first are `update_message` edits of the message the keyboard
+sits on, not new sends: walking a long history leaves one message in the chat
+instead of a screenful of near-identical ones, and "✖️ Tutup" can retire the
+keyboard rather than only apologising for still being there.
 
 The callback payload is the offset itself (`list:20`), not an index into
-server-side state. There is deliberately no `TelegramDeps` entry for `/list`:
+server-side state. `TelegramDeps` holds nothing about `/list` except a
+duplicate-tap guard it can lose at any moment:
 
   - a keyboard scrolled back to next week still works, and after a restart too;
-  - two `/list` messages in the same chat page independently, instead of
-    fighting over one "current page" per user;
+  - two `/list` messages in the same chat page independently, each editing
+    itself, instead of fighting over one "current page" per user;
   - nothing has to be cleaned up when the user sends a new message, so no
     handler needs to know `/list` exists to avoid leaving stale state behind.
 

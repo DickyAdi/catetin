@@ -17,7 +17,7 @@ from typing import Any
 
 from catetin.domain.ports.repositories import UnitOfWork
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.error import Forbidden, RetryAfter, TelegramError
+from telegram.error import BadRequest, Forbidden, RetryAfter, TelegramError
 
 _logger = logging.getLogger("catetin.telegram.sender")
 
@@ -39,6 +39,20 @@ def chunk_text(text: str, size: int = _CHUNK_SIZE) -> list[str]:
     if remaining:
         chunks.append(remaining)
     return chunks
+
+
+def _keyboard(buttons: list[tuple[str, str]] | None) -> InlineKeyboardMarkup | None:
+    """One row of (label, callback_data), or None for "no keyboard at all".
+
+    The None is load-bearing on the edit path: PTB omits a None `reply_markup`
+    from the request, and an `editMessageText` without one is what strips a
+    keyboard off a message.
+    """
+    if not buttons:
+        return None
+    return InlineKeyboardMarkup(
+        [[InlineKeyboardButton(label, callback_data=data) for label, data in buttons]]
+    )
 
 
 class TelegramSender:
@@ -99,9 +113,7 @@ class TelegramSender:
         chat_id = await self._resolve_chat_id(user_id)
         if chat_id is None:
             return
-        keyboard = InlineKeyboardMarkup(
-            [[InlineKeyboardButton(opt, callback_data=f"choice:{opt}") for opt in options]]
-        )
+        keyboard = _keyboard([(opt, f"choice:{opt}") for opt in options])
         await self._send(
             chat_id, lambda: self._bot.send_message(chat_id, prompt, reply_markup=keyboard)
         )
@@ -110,9 +122,49 @@ class TelegramSender:
         chat_id = await self._resolve_chat_id(user_id)
         if chat_id is None:
             return
-        keyboard = InlineKeyboardMarkup(
-            [[InlineKeyboardButton(label, callback_data=data) for label, data in buttons]]
-        )
         await self._send(
-            chat_id, lambda: self._bot.send_message(chat_id, prompt, reply_markup=keyboard)
+            chat_id,
+            lambda: self._bot.send_message(
+                chat_id, prompt, reply_markup=_keyboard(buttons)
+            ),
         )
+
+    async def update_message(
+        self,
+        user_id: int,
+        message_id: int,
+        text: str,
+        buttons: list[tuple[str, str]] | None = None,
+    ) -> None:
+        """`editMessageText` — the same message, new text and new keyboard.
+
+        Omitting `reply_markup` is how Telegram removes an inline keyboard, so
+        `buttons=None` needs no special call: `_keyboard` returns None and PTB
+        drops the field from the request.
+
+        No `chunk_text` here, deliberately. Splitting an edit is meaningless —
+        the extra chunks would have nowhere to go but new messages, which is
+        the thing the caller asked not to happen.
+        """
+        chat_id = await self._resolve_chat_id(user_id)
+        if chat_id is None:
+            return
+
+        async def edit() -> None:
+            try:
+                await self._bot.edit_message_text(
+                    text,
+                    chat_id=chat_id,
+                    message_id=message_id,
+                    reply_markup=_keyboard(buttons),
+                )
+            except BadRequest as exc:
+                # Telegram rejects an edit that would change nothing. It means
+                # the screen already says what we wanted it to say, so it is
+                # the intended state arriving early (a double tap), not a
+                # failure worth a stack trace.
+                if "not modified" not in str(exc).lower():
+                    raise
+                _logger.debug("edit was a no-op for chat %s message %s", chat_id, message_id)
+
+        await self._send(chat_id, edit)
