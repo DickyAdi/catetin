@@ -455,6 +455,7 @@ class FakeReportRenderer:
         self.last_item_totals: list[ItemTotal] | None = None
         self.last_expense_item_totals: list[ItemTotal] | None = None
         self.last_transactions: list[Transaction] | None = None
+        self.last_timezone: str | None = None
 
     async def render_pdf(
         self,
@@ -466,10 +467,12 @@ class FakeReportRenderer:
         transactions: list[Transaction],
         business_name: str | None,
         period_label: str,
+        timezone: str,
     ) -> bytes:
         self.calls += 1
         self.last_business_name = business_name
         self.last_period_label = period_label
+        self.last_timezone = timezone
         self.last_item_totals = sale_item_totals
         self.last_expense_item_totals = expense_item_totals
         self.last_transactions = transactions

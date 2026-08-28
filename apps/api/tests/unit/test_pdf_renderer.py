@@ -83,6 +83,7 @@ async def _render(
     summary: Summary = SUMMARY,
     business_name: str | None = "Warung Bu Rina",
     period_label: str = "Laporan 7 Hari Terakhir",
+    timezone: str = "Asia/Jakarta",
 ) -> bytes:
     renderer = PdfRenderer()
     return await renderer.render_pdf(
@@ -94,6 +95,7 @@ async def _render(
         transactions=transactions,
         business_name=business_name,
         period_label=period_label,
+        timezone=timezone,
     )
 
 
@@ -176,6 +178,35 @@ async def test_render_pdf_empty_period_still_produces_pdf() -> None:
     assert "Tidak ada transaksi usaha" in text
 
 
+async def test_detail_table_clock_column_is_in_the_users_timezone() -> None:
+    """QA round 2: the "Jam" column was rendered in UTC, so a WIB user saw
+    12:00 for a sale they made at 19:00. `occurred_at` is a UTC epoch and only
+    the user's zone can turn it back into the clock they read off the wall."""
+    one_tx = [_tx(1, "sale", "Ayam Geprek", 50_000)]  # occurred_at 12:00:01 UTC
+
+    jakarta = _extract_text(await _render(transactions=one_tx, timezone="Asia/Jakarta"))
+    assert "19:00" in jakarta
+    assert "12:00" not in jakarta
+
+    jayapura = _extract_text(await _render(transactions=one_tx, timezone="Asia/Jayapura"))
+    assert "21:00" in jayapura
+
+
+async def test_generated_at_header_is_stamped_in_the_users_timezone() -> None:
+    """The "Dibuat pada" line was hardcoded to UTC too; `%Z` gives the three
+    Indonesian zones the names users actually use."""
+    assert "WIB" in _extract_text(await _render(timezone="Asia/Jakarta"))
+    assert "WITA" in _extract_text(await _render(timezone="Asia/Makassar"))
+
+
+async def test_unknown_timezone_falls_back_to_utc_instead_of_raising() -> None:
+    """Zones are validated before they are stored, so this only fires on a
+    tzdata mismatch — where a slightly-off clock column beats no report."""
+    text = _extract_text(await _render(timezone="Mars/Olympus_Mons"))
+
+    assert "12:00" in text  # the raw UTC time, unconverted
+
+
 async def test_render_pdf_multi_page_detail_table_with_many_transactions() -> None:
     many = [_tx(i, "sale", f"Item {i}", 10_000 + i) for i in range(60)]
     pdf_bytes = await _render(transactions=many)
@@ -201,6 +232,7 @@ async def test_render_pdf_runs_concurrently_without_deadlock() -> None:
                 transactions=[],
                 business_name=None,
                 period_label="Laporan",
+                timezone="Asia/Jakarta",
             )
             for i in range(3)
         ]

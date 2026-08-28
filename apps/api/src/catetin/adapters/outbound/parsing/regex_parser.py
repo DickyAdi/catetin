@@ -10,6 +10,9 @@ extracted (most specific structural signal first):
                      -> <amount> is the line total
     trailing qty     "<item> <qty> <unit> <amount>"   e.g. "ayam 5 ekor 10rb"
                      -> <amount> is the per-unit price, total = qty x amount
+    bare qty         "<item> <qty> <amount>"          e.g. "ayam 5 10rb"
+                     -> the unit word is simply left out; same per-unit
+                        semantics as the trailing-qty form
     slash qty        "<item> <amount>/<qty>"          e.g. "ayam 50rb/2"
                      -> <amount> is the line total, split across <qty>
     plain item+amt   "<item> <amount>"                the fallback
@@ -32,6 +35,33 @@ _VERB_RE = re.compile(r"^\s*(?P<verb>" + "|".join(_ALL_VERBS) + r")\b", re.IGNOR
 _UNIT_ALTS = "|".join(sorted(lexicon.UNITS, key=len, reverse=True))
 _QTY_UNIT_RE = re.compile(
     r"\b(?P<qty>\d+)\s*(?:x\s*)?(?P<unit>" + _UNIT_ALTS + r")\b", re.IGNORECASE
+)
+
+_MULT_ALTS = "|".join(sorted(amounts.MULTIPLIERS, key=len, reverse=True))
+
+# A number that is unmistakably a *price* rather than a bare count: it carries
+# a multiplier suffix ("10rb"), a thousands separator ("10.000"), or an
+# explicit "Rp". Deliberately excludes the bare integer, so "ayam 50 60" keeps
+# reading as one oddly-named item instead of becoming 50 x 60.
+_PRICE_AHEAD = (
+    r"(?:Rp\.?\s*\d"
+    r"|\d{1,3}(?:\.\d{3})+\b"
+    r"|\d+(?:[.,]\d+)?\s*(?:" + _MULT_ALTS + r")\b)"
+)
+
+# "ayam 5 10rb" — the unit word people are supposed to write ("5 ekor") is the
+# first thing they drop, so a small integer sitting directly in front of a
+# price is read as the quantity. Only tried when `_QTY_UNIT_RE` found nothing,
+# so "3 pcs ayam 50rb" is untouched.
+#
+#   (?<![\w.,])   the digits must start a token: rules out "barang5" and the
+#                 "000" tail of "5.000" (which would otherwise parse as qty 0
+#                 and fail domain validation)
+#   [1-9]\d{0,2}  1..999, no leading zero — a count, not an account number
+#   (?![\d.,])    ...and must end there, so "5.000" / "12,5" never split
+_QTY_BARE_RE = re.compile(
+    r"(?<![\w.,])(?P<qty>[1-9]\d{0,2})(?:\s*x)?(?![\d.,])(?=\s+" + _PRICE_AHEAD + r")",
+    re.IGNORECASE,
 )
 
 _SLASH_QTY_RE = re.compile(r"/\s*(?P<qty>\d+)\s*$")
@@ -80,7 +110,7 @@ def _parse_segment(raw_segment: str, today: date) -> ParsedTransaction | FailedS
     remainder = working[verb_match.end() :].strip() if verb_match else working
 
     qty = 1
-    qty_match = _QTY_UNIT_RE.search(remainder)
+    qty_match = _QTY_UNIT_RE.search(remainder) or _QTY_BARE_RE.search(remainder)
     if qty_match:
         qty = int(qty_match.group("qty"))
 
@@ -114,6 +144,8 @@ def _parse_segment(raw_segment: str, today: date) -> ParsedTransaction | FailedS
     #                                          unit, so it is the per-unit
     #                                          price and the line total is
     #                                          qty x amount (5 x 10rb = 50rb)
+    #   "ayam 5 10rb"          bare qty     -> the unit word was omitted; it
+    #                                          means the same thing as above
     #
     # The slash form ("ayam 50rb/2") is explicitly "50rb split across 2" and
     # keeps its divide semantics, so it opts out.
