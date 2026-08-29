@@ -25,8 +25,9 @@ ENV UV_COMPILE_BYTECODE=1 \
 
 WORKDIR /app
 
-# --no-dev: pytest/ruff/mypy/alembic stay off the runtime image. Migrations
-# run on the host/CI (`make migrate`) before deploy, per CLAUDE.md.
+# --no-dev: pytest/ruff/mypy stay off the runtime image. Alembic does NOT —
+# it moved to the runtime deps in apps/api/pyproject.toml so the one-off
+# `migrate` compose service can run `alembic upgrade head` in this image.
 #
 # Manifests first so dependency layers cache across source-only changes.
 COPY pyproject.toml uv.lock ./
@@ -49,7 +50,16 @@ ENV PYTHONUNBUFFERED=1
 
 # Created before the COPYs so --chown can name it: chowning after the fact
 # would rewrite every copied file into a second, full-size layer.
-RUN useradd --create-home --shell /usr/sbin/nologin appuser
+#
+# /data is the mount point for the SQLite volume in every compose file. It has
+# to exist here, owned by appuser, because Docker seeds a *fresh* named
+# volume's ownership and contents from the image directory underneath it — a
+# missing /data yields a root:root:755 volume that a non-root container cannot
+# write, and both alembic and the app then fail with the deeply unhelpful
+# "unable to open database file".
+RUN useradd --create-home --shell /usr/sbin/nologin appuser \
+    && mkdir -p /data \
+    && chown appuser:appuser /data
 
 WORKDIR /app
 

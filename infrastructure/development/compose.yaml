@@ -123,6 +123,41 @@ services:
     networks:
       - obs-net
 
+  # One-off: brings the schema on catetin-dev-data up to head, then exits.
+  # Same build/env/volume as `api` on purpose — it has to migrate the very DB
+  # the api will open, and the api's startup version_check refuses to boot
+  # against anything older than config.expected_db_revision.
+  #
+  #   make infra-dev-up-migrate      migrate, then bring the stack up
+  #   make infra-dev-up              bring the stack up, migrate nothing
+  #
+  # Deliberately NOT wired as `api: depends_on: migrate` — the two variants
+  # above are the whole point, and a hard dependency would collapse them.
+  # No depends_on: alloy either; alembic emits no telemetry.
+  migrate:
+    build:
+      context: ../..
+      dockerfile: apps/api/Dockerfile
+    container_name: catetin-dev-migrate
+    env_file:
+      - path: ../../apps/api/.env
+        required: false
+    environment:
+      CATETIN_DATABASE_URL: sqlite+aiosqlite:////data/catetin.db
+      CATETIN_BACKUP_DIR: /data/backups
+    volumes:
+      - catetin-dev-data:/data
+    # alembic.ini lives in /app/apps/api (the image's WORKDIR) and env.py
+    # imports catetin.config, which PYTHONPATH already covers.
+    command: ["/app/.venv/bin/alembic", "upgrade", "head"]
+    restart: "no"
+    # Keeps a plain `docker compose up` from starting this service — that is
+    # exactly the non-migrate variant. `docker compose run migrate` enables the
+    # profile implicitly, so the -migrate make targets need no extra flag.
+    profiles: ["migrate"]
+    networks:
+      - obs-net
+
 volumes:
   alloy-data:
   loki-data:

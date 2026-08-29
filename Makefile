@@ -11,10 +11,11 @@ ALLOY_UI := http://127.0.0.1:12345
 .PHONY: help setup dev dev-api dev-fe dev-all dev-down dev-bot bot-commands test lint typecheck migrate migrate-new db-reset \
 	webhook-test webhook-check webhook-remove \
 	dockerized docker-up docker-down clean status deploy \
-	infra-up infra-down infra-logs infra-ps infra-dev-up infra-dev-down obs-check
+	infra-up infra-up-migrate infra-down infra-logs infra-ps \
+	infra-dev-up infra-dev-up-migrate infra-dev-down obs-check
 
 help: ## Show this help
-	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-16s\033[0m %s\n", $$1, $$2}'
+	@grep -E '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2}'
 
 setup: ## Install backend (uv) and web (npm) deps; seed .env
 	cd $(APP_DIR) && uv sync
@@ -118,6 +119,13 @@ docker-down: ## Stop and remove containers
 # Deployment = Alloy + socket proxy + node-exporter + api, shipping to Grafana
 # Cloud. Development = the same collector topology against a local Loki, no
 # credentials needed. Run one or the other; they share host ports 8000/12345.
+#
+# Each stack comes in two flavours. The plain `infra-up` / `infra-dev-up` bring
+# containers up and touch the schema not at all. The `-migrate` variants run
+# the one-off `migrate` service first (`run --rm`, so it exits and leaves
+# nothing behind) and only then start the stack. Use those on a fresh volume or
+# after pulling new revisions: the api's startup version_check refuses to boot
+# against a DB older than config.expected_db_revision.
 
 infra-up: ## Start the production observability stack (needs infrastructure/deployment/.env)
 	@if [ ! -f infrastructure/deployment/.env ]; then \
@@ -126,6 +134,16 @@ infra-up: ## Start the production observability stack (needs infrastructure/depl
 	fi
 	docker compose -f $(INFRA_DEPLOY) up -d
 	@echo "    alloy ui: $(ALLOY_UI)  (localhost only)   logs: make infra-logs"
+
+infra-up-migrate: ## Migrate the production DB to head (one-off container), then start the stack
+	@if [ ! -f infrastructure/deployment/.env ]; then \
+		echo "missing infrastructure/deployment/.env — copy .env.example and fill in your Grafana Cloud values"; \
+		exit 1; \
+	fi
+	@echo "==> running migrations (alembic upgrade head) in a one-off container"
+	docker compose -f $(INFRA_DEPLOY) run --rm migrate
+	@echo "==> migrations applied — starting the stack"
+	@$(MAKE) infra-up
 
 infra-down: ## Stop the production observability stack
 	docker compose -f $(INFRA_DEPLOY) down
@@ -142,6 +160,12 @@ infra-ps: ## Show container status for both observability stacks
 infra-dev-up: ## Start the local observability stack (Loki + Grafana, no cloud creds)
 	docker compose -f $(INFRA_DEV) up -d --build
 	@echo "    grafana: http://localhost:3001   loki: http://localhost:3100   alloy ui: $(ALLOY_UI)"
+
+infra-dev-up-migrate: ## Migrate the dev DB to head (one-off container), then start the local stack
+	@echo "==> running migrations (alembic upgrade head) in a one-off container"
+	docker compose -f $(INFRA_DEV) run --rm --build migrate
+	@echo "==> migrations applied — starting the stack"
+	@$(MAKE) infra-dev-up
 
 infra-dev-down: ## Stop the local observability stack
 	docker compose -f $(INFRA_DEV) down
