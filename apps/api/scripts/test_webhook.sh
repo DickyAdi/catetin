@@ -32,12 +32,16 @@ load_env() {
     TOKEN=$(grep -E '^CATETIN_TELEGRAM_BOT_TOKEN=' "$ENV_FILE" | head -1 | cut -d= -f2- | tr -d '"' | tr -d "'" || true)
     SECRET=$(grep -E '^CATETIN_TELEGRAM_WEBHOOK_SECRET=' "$ENV_FILE" | head -1 | cut -d= -f2- | tr -d '"' | tr -d "'" || true)
 
-    [[ -z "$TOKEN" ]] && die "CATETIN_TELEGRAM_BOT_TOKEN is empty in $ENV_FILE"
-    [[ -z "$SECRET" ]] && die "CATETIN_TELEGRAM_WEBHOOK_SECRET is empty in $ENV_FILE
+    if [[ -z "$TOKEN" ]]; then
+        die "CATETIN_TELEGRAM_BOT_TOKEN is empty in $ENV_FILE"
+    fi
+    if [[ -z "$SECRET" ]]; then
+        die "CATETIN_TELEGRAM_WEBHOOK_SECRET is empty in $ENV_FILE
 
 Generate one with:  openssl rand -hex 32
 Then add to $ENV_FILE:
     CATETIN_TELEGRAM_WEBHOOK_SECRET=<the-random-string>"
+    fi
 }
 
 # --- Commands ---------------------------------------------------------------
