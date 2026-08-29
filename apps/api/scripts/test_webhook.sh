@@ -15,7 +15,7 @@
 
 set -euo pipefail
 
-ENV_FILE="apps/api/.env"
+ENV_FILE=".env"
 API_BASE="https://api.telegram.org"
 
 die() {
@@ -27,7 +27,7 @@ die() {
 
 load_env() {
     if [[ ! -f "$ENV_FILE" ]]; then
-        die "$ENV_FILE not found. Copy apps/api/.env.example to apps/api/.env first."
+        die "$ENV_FILE not found. Copy .env.example to .env first (run from apps/api)."
     fi
     TOKEN=$(grep -E '^CATETIN_TELEGRAM_BOT_TOKEN=' "$ENV_FILE" | head -1 | cut -d= -f2- | tr -d '"' | tr -d "'" || true)
     SECRET=$(grep -E '^CATETIN_TELEGRAM_WEBHOOK_SECRET=' "$ENV_FILE" | head -1 | cut -d= -f2- | tr -d '"' | tr -d "'" || true)
