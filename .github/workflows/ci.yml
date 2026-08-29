@@ -1,0 +1,153 @@
+name: CI
+
+# Backend is the gate: tests, lint, types, and the migration chain. The web job
+# runs in parallel and exists because the marketing site is only ever built in
+# CI (node/npm never touches the VPS), so a broken build would otherwise first
+# surface at the hosting provider.
+
+on:
+  push:
+    branches: [master]
+    # KEEP IN SYNC with the pull_request list below. GitHub does not expand YAML
+    # anchors in workflow files, so the two lists have to be duplicated by hand.
+    #
+    # Everything not listed here is treated as code and does trigger CI. That
+    # deliberately includes packages/assets/** (backend runtime data: the PDF
+    # renderer resolves the logo and font through apps/api/src/catetin/assets.py)
+    # and apps/web/** (covered by the web job below).
+    paths-ignore:
+      - '**.md'          # README.md, CLAUDE.md, infrastructure/README.md, apps/**/*.md
+      - 'docs/**'
+      - 'LICENSE'
+      - '.gitignore'
+      - '**/.gitignore'  # NOTE: does not match Dockerfile.dockerignore, which is code
+  pull_request:
+    branches: [master]
+    # KEEP IN SYNC with the push list above.
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - 'LICENSE'
+      - '.gitignore'
+      - '**/.gitignore'
+
+# A newer push to the same branch or PR cancels the run still in flight.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    name: backend (apps/api)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/api
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up uv and Python
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          # "latest-known" installs the newest uv this action ships checksums
+          # for, so the download stays verified without pinning a stale uv.
+          version: "latest-known"
+          # Matches apps/api/Dockerfile (python:3.13-slim).
+          python-version: "3.13"
+          enable-cache: true
+          # One lockfile for the whole workspace, at the repo root.
+          cache-dependency-glob: "uv.lock"
+
+      # apps/api is a workspace member: uv walks up to the root pyproject.toml
+      # and resolves to the single root .venv/uv.lock.
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: Tests
+        run: uv run pytest tests/ -q
+
+      - name: Lint (ruff)
+        run: uv run ruff check src tests
+
+      - name: Type check (mypy)
+        run: uv run mypy src/catetin
+
+      - name: Migrations apply cleanly to head on a fresh database
+        env:
+          # alembic/env.py reads this first and only falls back to Settings()
+          # (which demands a Telegram token and ops credentials) when it is
+          # unset. Scoped to this step so it cannot leak into pytest.
+          CATETIN_DATABASE_URL: sqlite+aiosqlite:///${{ runner.temp }}/ci-migrations.db
+        run: |
+          set -euo pipefail
+          uv run alembic upgrade head
+          # config.expected_db_revision is what the app asserts at startup
+          # (version_check). Comparing against it catches the classic miss:
+          # a new revision landed but config.py was never bumped, which would
+          # stop the container from booting after deploy. Reading the field
+          # default off the class avoids constructing Settings().
+          expected=$(uv run python -c \
+            "from catetin.config import Settings; print(Settings.model_fields['expected_db_revision'].default)")
+          current=$(uv run alembic current 2>/dev/null)
+          echo "expected: $expected (head)"
+          echo "current:  $current"
+          test "$current" = "$expected (head)"
+
+      # INFORMATIONAL ONLY, and it currently reports differences on a database
+      # that is genuinely at head. Autogenerate cannot round-trip the
+      # hand-written partial indexes and CHECK constraints (see CLAUDE.md), so
+      # every run flags idx_tx_user_recent and the ck_*_bool constraints. Do not
+      # promote this to a gate until those false positives are gone.
+      - name: alembic check (ORM vs migrations, non-blocking)
+        continue-on-error: true
+        env:
+          CATETIN_DATABASE_URL: sqlite+aiosqlite:///${{ runner.temp }}/ci-migrations.db
+        run: uv run alembic check
+
+      # Parse-only, no daemon work and no image build.
+      - name: Compose files parse
+        working-directory: ${{ github.workspace }}
+        run: |
+          set -euo pipefail
+          # Root compose.yaml declares apps/api/.env as a required env_file, so
+          # seed a throwaway one from the example. Last step in the job on
+          # purpose: nothing after it can pick the file up.
+          cp apps/api/.env.example apps/api/.env
+          docker compose -f compose.yaml config -q
+          docker compose -f infrastructure/development/compose.yaml config -q
+          # The deployment file interpolates Grafana Cloud secrets with the
+          # ${VAR:?err} form. Any non-empty values satisfy the parse.
+          GRAFANA_CLOUD_USER=ci \
+          GRAFANA_CLOUD_TOKEN=ci \
+          GRAFANA_CLOUD_LOGS_URL=http://ci \
+          GRAFANA_CLOUD_METRICS_URL=http://ci \
+          GRAFANA_CLOUD_OTLP_URL=http://ci \
+            docker compose -f infrastructure/deployment/compose.yaml config -q
+
+  web:
+    name: web (apps/web)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/web
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type check (tsc)
+        run: npm run typecheck
+
+      - name: Build (vite-react-ssg prerender)
+        run: npm run build
