@@ -136,6 +136,7 @@ version = "0.1.0"
 source = { editable = "apps/api" }
 dependencies = [
     { name = "aiosqlite" },
+    { name = "alembic" },
     { name = "fastapi" },
     { name = "fpdf2" },
     { name = "httpx" },
@@ -150,7 +151,6 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
-    { name = "alembic" },
     { name = "mypy" },
     { name = "pypdf" },
     { name = "pytest" },
@@ -161,6 +161,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "aiosqlite" },
+    { name = "alembic" },
     { name = "fastapi" },
     { name = "fpdf2" },
     { name = "httpx" },
@@ -175,7 +176,6 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "alembic" },
     { name = "mypy" },
     { name = "pypdf", specifier = ">=6.16.1" },
     { name = "pytest" },

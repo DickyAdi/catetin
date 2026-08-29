@@ -16,5 +16,35 @@ services:
       - "8000:8000"
     restart: unless-stopped
 
+  # One-off: brings the schema on catetin_data up to head, then exits. Same
+  # image/env/volume as `api`, because the api's startup version_check refuses
+  # to boot against a DB older than config.expected_db_revision — and on a
+  # fresh volume there is no schema at all.
+  #
+  #   docker compose run --rm migrate && docker compose up -d
+  #
+  # No `api: depends_on: migrate`: migrating is an explicit step, not a side
+  # effect of starting the app. The infrastructure/ stacks wrap the same
+  # pattern as `make infra-up-migrate` / `make infra-dev-up-migrate`.
+  migrate:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    env_file:
+      - apps/api/.env
+    environment:
+      CATETIN_DATABASE_URL: sqlite+aiosqlite:////data/catetin.db
+      CATETIN_BACKUP_DIR: /data/backups
+    volumes:
+      - catetin_data:/data
+    # alembic.ini lives in /app/apps/api (the image's WORKDIR) and env.py
+    # imports catetin.config, which PYTHONPATH already covers.
+    command: ["/app/.venv/bin/alembic", "upgrade", "head"]
+    restart: "no"
+    # Keeps a plain `docker compose up` from starting this service — that is
+    # exactly the non-migrate variant. `docker compose run migrate` enables the
+    # profile implicitly, so the -migrate make targets need no extra flag.
+    profiles: ["migrate"]
+
 volumes:
   catetin_data:

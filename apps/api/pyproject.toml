@@ -15,11 +15,15 @@ dependencies = [
     "pydantic",
     "pydantic-settings",
     "pyrage>=1.4.0",
+    # Runtime, not dev: the `migrate` compose service runs `alembic upgrade
+    # head` inside this image before the api boots, so alembic has to survive
+    # the `--no-dev` build. Migrations themselves stay hand-written; the app
+    # still only VERIFIES the revision at startup (config.expected_db_revision).
+    "alembic",
 ]
 
 [dependency-groups]
 dev = [
-    "alembic",
     "pytest",
     "pytest-asyncio",
     "ruff",

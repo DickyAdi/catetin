@@ -1,0 +1,40 @@
+# Ignore file for apps/api/Dockerfile. Build context is the repo root (see
+# compose.yaml: build.context: .), so a plain .dockerignore would have to sit
+# at the root and apply to every Dockerfile. BuildKit's per-Dockerfile form is
+# "<dockerfile path>.dockerignore" — the literal Dockerfile filename plus the
+# suffix, NOT a bare .dockerignore next to it. Renaming it drops the excludes
+# silently, which once shipped a 22 MB .mypy_cache and a stale catetin.db into
+# the image.
+
+.git/
+.github/
+README.md
+CLAUDE.md
+
+# Web app isn't needed to build the API image
+apps/web/
+
+# Python cruft. Patterns are context-root-relative, so the tool caches need a
+# **/ prefix — they live in apps/api/, not at the root.
+**/__pycache__/
+**/*.py[codz]
+**/*.egg-info/
+**/.pytest_cache/
+**/.mypy_cache/
+**/.ruff_cache/
+**/.coverage
+htmlcov/
+
+# Local env / secrets / runtime data — never baked into the image
+apps/api/.env
+**/.venv/
+**/backups/
+.dev/
+
+# Dev SQLite DB (+ WAL/SHM). The container's DB lives on the /data volume.
+**/catetin.db
+**/catetin.db-wal
+**/catetin.db-shm
+
+# Tests aren't needed in the runtime image
+apps/api/tests/
